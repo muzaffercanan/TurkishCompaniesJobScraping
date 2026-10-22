@@ -1,0 +1,30 @@
+# Kisisel veri: basvuru / favori / not isaretleri ve API anahtari
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/config.json
+*.db
+*.db-shm
+*.db-wal
+ilanlar.db
+
+# Uretilen raporlar ve yedekler
+ilan_raporu.xlsx
+orig.xlsx
+yedek/
+
+# Arac/IDE yerel ayarlari
+.claude/
+.vscode/
+
+# Gizli bilgiler
+.env
+.env.*
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

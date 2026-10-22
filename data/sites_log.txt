@@ -1,0 +1,5 @@
+sitesi bilinmeyen firma: 1044
+ITU Cekirdek: 209 ad/site cifti, eslesen 163
+Marmara Teknokent: 134 ad/site cifti, eslesen 86
+alan adi tahmini deneniyor: 795 firma
+tahminle bulunan: 658 | hala sitesi bilinmeyen: 137 (baslangic 1044)

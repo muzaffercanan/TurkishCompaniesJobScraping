@@ -1,0 +1,10 @@
+[
+  {"firma": "Turkcell", "ats": "custom", "slug": "turkcell"},
+  {"firma": "Garanti BBVA", "ats": "custom", "slug": "garanti"},
+  {"firma": "HAVELSAN", "ats": "custom", "slug": "havelsan"},
+  {"firma": "Türk Telekom", "ats": "custom", "slug": "turktelekom"},
+  {"firma": "Amazon Türkiye", "ats": "custom", "slug": "amazon"},
+  {"firma": "Roketsan", "ats": "custom", "slug": "roketsan"},
+  {"firma": "Baykar", "ats": "custom", "slug": "baykar"},
+  {"firma": "Insider", "ats": "lever", "slug": "insiderone"}
+]

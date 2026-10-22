@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>İlan Radarı</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236366f1'/%3E%3Cstop offset='1' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cg fill='none' stroke='white' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='16' cy='16' r='9' opacity='.55'/%3E%3Ccircle cx='16' cy='16' r='4.5' opacity='.8'/%3E%3Cpath d='M16 16l7-7'/%3E%3C/g%3E%3C/svg%3E">
+<script>try{const t=JSON.parse(localStorage.getItem('ir:theme'));if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <symbol id="i-radar" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" opacity=".6"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l7-7"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></symbol>
+  <symbol id="i-circle-check" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></symbol>
+  <symbol id="i-chev-l" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></symbol>
+  <symbol id="i-chev-r" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+  <symbol id="i-briefcase" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></symbol>
+  <symbol id="i-building" viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4M8 6h.01M12 6h.01M16 6h.01M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z"/></symbol>
+  <symbol id="i-grad" viewBox="0 0 24 24"><path d="M22 10L12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></symbol>
+  <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></symbol>
+  <symbol id="i-rows" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3z"/><path d="M15 3v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></symbol>
+</defs></svg>
+
+<header class="top">
+  <div class="top-in">
+    <a class="brand" href="#jobs" aria-label="İlan Radarı">
+      <span class="logo"><svg class="i"><use href="#i-radar"/></svg></span><span class="brand-t">İlan Radarı</span>
+    </a>
+    <nav class="tabs" id="tabs" aria-label="Bölümler">
+      <button data-tab="jobs" class="on">İlanlar</button>
+      <button data-tab="companies">Firmalar</button>
+      <button data-tab="links">Arama kısayolları</button>
+      <button data-tab="health">Kaynak sağlığı <span class="cnt bad" id="cnt-health" hidden></span></button>
+      <button data-tab="log">Günlük</button>
+    </nav>
+    <div class="grow"></div>
+    <div class="fresh" id="fresh" title=""><i class="dot"></i><span id="freshtxt">yükleniyor…</span></div>
+    <button class="icon-btn" id="btnTheme" title="Tema (t)" aria-label="Temayı değiştir"></button>
+    <button class="icon-btn" id="btnHelp" title="Klavye kısayolları (?)" aria-label="Klavye kısayolları"><svg class="i"><use href="#i-keyboard"/></svg></button>
+    <div class="split" id="scanSplit">
+      <button class="btn primary" id="btnQuick" title="Bilinen ATS ve firma okuyucularını tarar (birkaç dakika)"><svg class="i"><use href="#i-zap"/></svg><span>Hızlı tara</span></button>
+      <button class="btn primary caret" id="btnScanMenu" aria-haspopup="menu" aria-expanded="false" aria-label="Diğer tarama seçenekleri"><svg class="i"><use href="#i-chev"/></svg></button>
+      <div class="menu" id="scanMenu" role="menu" hidden>
+        <button role="menuitem" data-mode="hizli"><b>Hızlı tara</b><span>Bilinen ATS'ler ve özel okuyucular · birkaç dakika</span></button>
+        <button role="menuitem" data-mode="yeni"><b>Yeni eklenenleri tara</b><span>Excel'e sonradan eklenen, henüz hiç taranmamış firmalar</span></button>
+        <button role="menuitem" data-mode="program"><b>Genç yetenek / staj programlarını bul</b><span>Firmaların kendi sitelerindeki program sayfaları · 20–40 dk</span></button>
+        <button role="menuitem" data-mode="tam"><b>Tam tara</b><span>Tüm kariyer sayfaları, gerçek tarayıcıyla · 30–90 dk</span></button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="strip" id="prog" hidden>
+  <div class="strip-in">
+    <span class="spin" id="pspin"></span>
+    <span class="strip-ic" id="pdone" hidden><svg class="i"><use href="#i-circle-check"/></svg></span>
+    <div class="strip-text"><b id="pphase"></b><span id="ptext"></span></div>
+    <div class="bar" id="pbarwrap"><i id="pbar"></i></div>
+    <span class="pct" id="ppct"></span>
+    <button class="icon-btn sm" id="pclose" aria-label="Kapat" hidden><svg class="i"><use href="#i-x"/></svg></button>
+  </div>
+</div>
+
+<main class="wrap">
+  <!-- ============================== İLANLAR ============================== -->
+  <section id="tab-jobs">
+    <div class="kpis" id="kpis"></div>
+
+    <div class="toolbar" id="toolbar">
+      <div class="search">
+        <svg class="i"><use href="#i-search"/></svg>
+        <input type="search" id="q" placeholder="İlan, firma, konum ara…  (ör. backend, junior, Ankara)" autocomplete="off" spellcheck="false">
+        <button class="clear" id="qclear" aria-label="Aramayı temizle" hidden><svg class="i"><use href="#i-x"/></svg></button>
+        <kbd id="qkbd">/</kbd>
+      </div>
+      <div class="pop-wrap">
+        <button class="btn" id="btnFilters" aria-haspopup="dialog" aria-expanded="false"><svg class="i"><use href="#i-sliders"/></svg><span>Filtreler</span><span class="badge" id="fbadge" hidden></span></button>
+        <div class="popover" id="fpop" role="dialog" aria-label="Filtreler" hidden>
+          <div class="pop-grid">
+            <label class="field"><span>Konum</span><select id="region"><option value="">Tüm konumlar</option><option value="tr+">Türkiye + uzaktan + belirtilmemiş</option>
+              <option value="Türkiye">Sadece Türkiye</option><option value="Uzaktan">Uzaktan</option><option value="Yurt dışı">Yurt dışı</option></select></label>
+            <label class="field"><span>Kategori</span><select id="category"><option value="">Tüm kategoriler</option></select></label>
+            <label class="field"><span>Firmanın şehri</span><select id="city"><option value="">Tüm şehirler</option></select></label>
+            <label class="field"><span>Firma büyüklüğü</span><select id="size"><option value="">Tüm büyüklükler</option></select></label>
+            <label class="field"><span>Kaynak</span><select id="source"><option value="">Tüm kaynaklar</option></select></label>
+          </div>
+          <div class="pop-toggles">
+            <label class="switch"><input type="checkbox" id="tech"><i></i><span>Sadece yazılım / teknik ilanlar</span></label>
+            <label class="switch" title="Arama kelimesini ilan açıklamalarında da ara (ör. python, yeni mezun)"><input type="checkbox" id="indesc"><i></i><span>Açıklamada da ara</span></label>
+            <label class="switch"><input type="checkbox" id="hideApplied"><i></i><span>Başvurduklarımı gizle</span></label>
+            <label class="switch"><input type="checkbox" id="closed"><i></i><span>Kapanan ilanları da göster</span></label>
+          </div>
+          <div class="pop-foot"><button class="btn ghost" id="fclear">Filtreleri sıfırla</button><button class="btn primary" id="fdone">Tamam</button></div>
+        </div>
+      </div>
+      <label class="sortsel"><span>Sırala</span><select id="sort">
+        <option value="new">En yeni eklenen</option><option value="posted">Yayın tarihi</option><option value="company">Firma (A–Z)</option><option value="title">Başlık (A–Z)</option></select></label>
+      <div class="seg" id="viewmode" role="group" aria-label="Görünüm">
+        <button data-g="0" title="Düz liste (g)"><svg class="i"><use href="#i-list"/></svg><span>Liste</span></button>
+        <button data-g="1" title="Firmaya göre grupla (g)"><svg class="i"><use href="#i-layers"/></svg><span>Firmaya göre</span></button>
+      </div>
+      <button class="icon-btn" id="btnDense" title="Sıkı görünüm" aria-label="Sıkı görünüm" aria-pressed="false"><svg class="i"><use href="#i-rows"/></svg></button>
+      <button class="icon-btn" id="btnExport" title="Görünen ilanları CSV olarak indir" aria-label="CSV indir"><svg class="i"><use href="#i-download"/></svg></button>
+    </div>
+
+    <div class="subbar">
+      <div class="seg views" id="views" role="tablist" aria-label="İlan görünümü"></div>
+      <div class="grow"></div>
+      <span class="count" id="jcount" aria-live="polite"></span>
+    </div>
+
+    <div class="qf">
+      <button class="chip preset" id="presetFit" title="Junior + staj, yazılım/teknik, Türkiye / uzaktan"><svg class="i"><use href="#i-sparkles"/></svg>Bana uygun</button>
+      <span class="sep"></span>
+      <span class="lab">Seviye</span>
+      <div class="chips" id="levels"></div>
+      <span class="sep"></span>
+      <span class="lab">Eklenme</span>
+      <div class="seg sm" id="daychips" role="group" aria-label="Eklenme zamanı"></div>
+    </div>
+
+    <div class="active" id="active" hidden></div>
+
+    <div id="jlist" class="list" aria-live="polite"></div>
+    <button class="more" id="jmore" hidden></button>
+  </section>
+
+  <!-- ============================== FİRMALAR ============================== -->
+  <section id="tab-companies" hidden>
+    <div class="note"><svg class="i"><use href="#i-building"/></svg><div>Uygulama her firmanın kariyer sayfasını bulmaya ve ilanlarını okumaya çalışır. Site ya da kariyer adresi yanlışsa buradan düzeltip <b>Yeniden keşfet</b>'e basabilirsin.
+      “Genel ayrıştırıcı” kaynaklı siteler otomatik bulundu, nadiren yanlış olabilir.</div></div>
+    <details class="card keybox" id="searchbox">
+      <summary><svg class="i"><use href="#i-key"/></svg><b>Web sitesi bulma (arama API)</b><span class="muted" id="sitecount"></span></summary>
+      <div class="keyrow">
+        <input type="password" id="bravekey" class="inp" placeholder="Brave Search API anahtarı" autocomplete="off">
+        <button class="btn sm" id="savekey">Anahtarı kaydet</button>
+        <button class="btn sm primary" id="btnSites">Sitesi bilinmeyenleri ara</button>
+      </div>
+      <p class="muted">Anahtar: <a href="https://brave.com/search/api/" target="_blank" rel="noopener">brave.com/search/api</a> (aylık ücretsiz kredi; kart gerekir). Yalnızca bu bilgisayarda saklanır.</p>
+    </details>
+    <div class="toolbar plain">
+      <div class="search"><svg class="i"><use href="#i-search"/></svg><input type="search" id="cq" placeholder="Firma ya da site ara…" autocomplete="off"></div>
+      <select id="cstatus"><option value="">Tüm durumlar</option></select>
+      <span class="count" id="ccount"></span>
+    </div>
+    <div class="tblwrap"><table class="tbl"><thead><tr><th>Firma</th><th class="hide-md">Kategori / şehir</th><th>Web sitesi</th><th>Kariyer sayfası</th><th>Durum</th><th>İlan</th><th></th></tr></thead>
+      <tbody id="cbody"></tbody></table></div>
+    <button class="more" id="cmore" hidden></button>
+  </section>
+
+  <!-- ============================== KISAYOLLAR ============================== -->
+  <section id="tab-links" hidden>
+    <div class="note"><svg class="i"><use href="#i-globe"/></svg><div>Bu siteler otomatik toplamaya izin vermediği için uygulama onları taramaz. Aramayı bir kez yaz, istediğin sitede tek tıkla aç.</div></div>
+    <div class="toolbar plain">
+      <label class="field inline"><span>Anahtar kelime</span><input type="text" id="lq" class="inp" value="yazılım" placeholder="ör. junior backend"></label>
+      <label class="field inline"><span>Konum</span><input type="text" id="lloc" class="inp" value="İstanbul" placeholder="Konum"></label>
+      <label class="switch"><input type="checkbox" id="l24" checked><i></i><span>Son 24 saat</span></label>
+      <label class="switch"><input type="checkbox" id="lentry" checked><i></i><span>Giriş seviyesi (LinkedIn)</span></label>
+      <div class="grow"></div>
+      <button class="btn primary" id="openAll"><svg class="i"><use href="#i-ext"/></svg>Hepsini aç</button>
+    </div>
+    <div class="cards" id="lcards"></div>
+  </section>
+
+  <!-- ============================== SAĞLIK ============================== -->
+  <section id="tab-health" hidden>
+    <div class="note"><svg class="i"><use href="#i-activity"/></svg><div>Her kaynağın son taraması. <b>Uyarı</b>: ilan sayısı birden düştü ya da ilanların çoğu bir anda değişti (okuyucu bozulmuş olabilir). <b>Hata</b>: kaynak okunamadı. Bu firmalarda Firmalar sekmesinden <b>Yeniden keşfet</b> dene.</div></div>
+    <div class="kpis three" id="hsum"></div>
+    <div class="tblwrap"><table class="tbl"><thead><tr><th>Durum</th><th>Firma</th><th>Kaynak</th><th>İlan (önceki → şimdi)</th><th class="hide-sm">Yeni / kapanan</th><th>Not</th><th class="hide-sm">Son tarama</th></tr></thead>
+      <tbody id="hbody"></tbody></table></div>
+  </section>
+
+  <!-- ============================== GÜNLÜK ============================== -->
+  <section id="tab-log" hidden>
+    <div class="logbar"><span class="muted" id="logmeta"></span><div class="grow"></div><button class="btn sm" id="logcopy"><svg class="i"><use href="#i-copy"/></svg>Kopyala</button></div>
+    <div class="log" id="logbox"><span class="dim">Henüz tarama yapılmadı.</span></div>
+  </section>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="İlan detayı" tabindex="-1">
+  <div class="d-head">
+    <button class="icon-btn" id="dprev" title="Önceki ilan (k)" aria-label="Önceki ilan"><svg class="i"><use href="#i-chev-l"/></svg></button>
+    <button class="icon-btn" id="dnext" title="Sonraki ilan (j)" aria-label="Sonraki ilan"><svg class="i"><use href="#i-chev-r"/></svg></button>
+    <span class="muted" id="dpos"></span>
+    <div class="grow"></div>
+    <button class="icon-btn" id="dcopy" title="Bağlantıyı kopyala" aria-label="Bağlantıyı kopyala"><svg class="i"><use href="#i-copy"/></svg></button>
+    <button class="icon-btn" id="dclose" title="Kapat (Esc)" aria-label="Kapat"><svg class="i"><use href="#i-x"/></svg></button>
+  </div>
+  <div class="d-body" id="dbody"></div>
+  <div class="d-foot" id="dfoot">
+    <a class="btn primary grow-btn" id="dgo" target="_blank" rel="noopener"><svg class="i"><use href="#i-ext"/></svg>İlana git</a>
+    <button class="btn tog star" id="dstar" data-act="star" title="Favori (s)"><svg class="i"><use href="#i-star"/></svg><span>Favori</span></button>
+    <button class="btn tog done" id="dapplied" data-act="applied" title="Başvurdum (a)"><svg class="i"><use href="#i-circle-check"/></svg><span>Başvurdum</span></button>
+    <button class="btn tog" id="dhide" data-act="hide" title="Gizle (h)"><svg class="i"><use href="#i-eye-off"/></svg><span>Gizle</span></button>
+  </div>
+</aside>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<button class="fab" id="totop" aria-label="Başa dön" hidden><svg class="i"><use href="#i-arrow-up"/></svg></button>
+
+<dialog id="dlg">
+  <form method="dialog">
+    <h3 id="dlgT"></h3>
+    <p id="dlgP"></p>
+    <div class="dlg-foot"><button class="btn ghost" value="no">Vazgeç</button><button class="btn primary" value="yes" id="dlgOk">Başlat</button></div>
+  </form>
+</dialog>
+
+<dialog id="help">
+  <form method="dialog">
+    <h3>Klavye kısayolları</h3>
+    <div class="keys">
+      <div><kbd>/</kbd><span>Aramaya git</span></div>
+      <div><kbd>j</kbd> <kbd>k</kbd><span>Sonraki / önceki ilan</span></div>
+      <div><kbd>Enter</kbd><span>İlan detayını aç</span></div>
+      <div><kbd>o</kbd><span>İlana git (yeni sekme)</span></div>
+      <div><kbd>s</kbd><span>Favori ekle / çıkar</span></div>
+      <div><kbd>a</kbd><span>Başvurdum işaretle</span></div>
+      <div><kbd>h</kbd><span>Gizle / göster</span></div>
+      <div><kbd>f</kbd><span>Filtreleri aç</span></div>
+      <div><kbd>g</kbd><span>Firmaya göre grupla</span></div>
+      <div><kbd>t</kbd><span>Tema değiştir</span></div>
+      <div><kbd>1</kbd>–<kbd>5</kbd><span>Sekmeler arasında geç</span></div>
+      <div><kbd>Esc</kbd><span>Kapat / aramayı temizle</span></div>
+    </div>
+    <div class="dlg-foot"><button class="btn primary" value="ok">Tamam</button></div>
+  </form>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

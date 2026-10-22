@@ -1,0 +1,1 @@
+{"args": ["kunbus-gmbh", null], "count": 0, "sample": [], "calls": {"GET https://kunbus-gmbh.jobs.personio.de/xml?language=tr ": {"status": 200, "final": "https://kunbus-gmbh.jobs.personio.de/xml?language=tr", "text": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<workzag-jobs>\n\n\n</workzag-jobs>"}}}

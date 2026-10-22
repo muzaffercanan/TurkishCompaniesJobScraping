@@ -1,0 +1,162 @@
+[
+ {
+  "firma": "OKX TR",
+  "kategori": "Kripto & Blockchain",
+  "sehir": "İstanbul",
+  "ats": "greenhouse",
+  "slug": "okx",
+  "count": 346
+ },
+ {
+  "firma": "Binance TR",
+  "kategori": "Kripto & Blockchain",
+  "sehir": "İstanbul",
+  "ats": "lever",
+  "slug": "binance",
+  "count": 33
+ },
+ {
+  "firma": "Trendyol",
+  "kategori": "E-ticaret & Tüketici İnternet",
+  "sehir": "İstanbul",
+  "ats": "lever",
+  "slug": "trendyol",
+  "count": 32
+ },
+ {
+  "firma": "Good Job Games",
+  "kategori": "Oyun",
+  "sehir": "İstanbul",
+  "ats": "greenhouse",
+  "slug": "goodjobgames",
+  "count": 30
+ },
+ {
+  "firma": "Dream Games",
+  "kategori": "Oyun",
+  "sehir": "İstanbul",
+  "ats": "lever",
+  "slug": "dreamgames",
+  "count": 20
+ },
+ {
+  "firma": "Bigger Games",
+  "kategori": "Oyun",
+  "sehir": "İstanbul",
+  "ats": "ashby",
+  "slug": "biggergames",
+  "count": 14
+ },
+ {
+  "firma": "Midas",
+  "kategori": "Fintech & Ödeme",
+  "sehir": "İstanbul",
+  "ats": "lever",
+  "slug": "getmidas",
+  "count": 13
+ },
+ {
+  "firma": "Codeway",
+  "kategori": "Oyun",
+  "sehir": "İstanbul",
+  "ats": "ashby",
+  "slug": "codeway",
+  "count": 13
+ },
+ {
+  "firma": "Spyke Games",
+  "kategori": "Oyun",
+  "sehir": "İstanbul",
+  "ats": "lever",
+  "slug": "spyke-games",
+  "count": 11
+ },
+ {
+  "firma": "iyzico",
+  "kategori": "Fintech & Ödeme",
+  "sehir": "İstanbul",
+  "ats": "lever",
+  "slug": "iyzico",
+  "count": 9
+ },
+ {
+  "firma": "Grand Games",
+  "kategori": "Oyun",
+  "sehir": "İstanbul",
+  "ats": "lever",
+  "slug": "grand",
+  "count": 8
+ },
+ {
+  "firma": "Mikro Yazılım",
+  "kategori": "Kurumsal Yazılım, ERP & SaaS",
+  "sehir": "İstanbul",
+  "ats": "recruitee",
+  "slug": "mikroyazilim",
+  "count": 7
+ },
+ {
+  "firma": "Udemy (Ankara)",
+  "kategori": "Global Şirket Türkiye Ofisi / Ar-Ge",
+  "sehir": "Ankara",
+  "ats": "greenhouse",
+  "slug": "udemy",
+  "count": 7
+ },
+ {
+  "firma": "Picus Security",
+  "kategori": "Siber Güvenlik",
+  "sehir": "Ankara",
+  "ats": "lever",
+  "slug": "picus",
+  "count": 7
+ },
+ {
+  "firma": "Loop Games",
+  "kategori": "Oyun",
+  "sehir": "İstanbul",
+  "ats": "lever",
+  "slug": "loopgames",
+  "count": 3
+ },
+ {
+  "firma": "Doktortakvimi",
+  "kategori": "Sağlık Teknolojileri",
+  "sehir": "İstanbul",
+  "ats": "ashby",
+  "slug": "doktortakvimi",
+  "count": 3
+ },
+ {
+  "firma": "Çiçeksepeti",
+  "kategori": "E-ticaret & Tüketici İnternet",
+  "sehir": "İstanbul",
+  "ats": "lever",
+  "slug": "ciceksepeti",
+  "count": 2
+ },
+ {
+  "firma": "Binalyze",
+  "kategori": "Siber Güvenlik",
+  "sehir": "Belirtilmemiş",
+  "ats": "ashby",
+  "slug": "binalyze",
+  "count": 2
+ },
+ {
+  "firma": "Dataroid",
+  "kategori": "Yapay Zeka & Veri",
+  "sehir": "İstanbul",
+  "ats": "lever",
+  "slug": "dataroid",
+  "count": 2
+ },
+ {
+  "firma": "Commencis",
+  "kategori": "Mobil Uygulama & Web Ajansları",
+  "sehir": "İstanbul",
+  "ats": "lever",
+  "slug": "commencis",
+  "count": 1
+ }
+]
