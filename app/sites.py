@@ -21,7 +21,7 @@ def harvest_itu():
     out, page = [], 1
     while page < 60:
         try:
-            _, _, t = fetch(f'https://girisimler.itucekirdek.com/?page={page}')
+            _, _, t = fetch(f'https://girisimler.itucekirdek.com/?page={page}', robots=True)
         except HttpError:
             break
         cards = t.split('rounded-lg shadow-lg overflow-hidden')[1:]
@@ -37,7 +37,7 @@ def harvest_itu():
 
 
 def harvest_marmara():
-    _, _, t = fetch('https://marmarateknokent.com.tr/firmalar/')
+    _, _, t = fetch('https://marmarateknokent.com.tr/firmalar/', robots=True)
     out = []
     for site, name in re.findall(r'elementor-post__title">\s*<a href="([^"]+)"[^>]*>(.*?)</a>', t, flags=re.S):
         site = site.split('#')[0]
@@ -99,7 +99,7 @@ def verify(url, name):
     if not resolves(url):
         return None
     try:
-        st, final, t = fetch(url, timeout=8, tries=1, max_bytes=400_000)
+        st, final, t = fetch(url, timeout=8, tries=1, max_bytes=400_000, robots=True)
     except HttpError:
         return None
     if st != 200 or PARKED.search(t[:60000]):
@@ -189,7 +189,7 @@ def verify_game(url, name):
     if not resolves(url):
         return None
     try:
-        st, final, t = fetch(url, timeout=8, tries=1, max_bytes=400_000)
+        st, final, t = fetch(url, timeout=8, tries=1, max_bytes=400_000, robots=True)
     except HttpError:
         return None
     if st != 200 or PARKED.search(t[:60000]):

@@ -26,8 +26,10 @@ def load_config():
 
 def save_config(cfg):
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
-    with open(CONFIG, 'w', encoding='utf-8') as f:
+    tmp = CONFIG + '.tmp'  # once gecici dosyaya yaz: zamanlayici yarim yazilmis ayar okumasin
+    with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, CONFIG)
 
 
 def brave(query, key):

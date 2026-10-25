@@ -3,6 +3,7 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 data/config.json
+data/logs/
 *.db
 *.db-shm
 *.db-wal

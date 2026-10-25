@@ -1,11 +1,14 @@
 """SQLite veritabani: firmalar, ilanlar, taramalar. Excel yalnizca OKUNUR (ilk aktarimda)."""
+import datetime as dt
+import functools
 import json
 import os
 import re
 import sqlite3
 import threading
+import unicodedata
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT =os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(ROOT, 'data', 'app.db')
 XLSX = os.path.join(ROOT, 'Turkiye_Yazilim_Firmalari_v2.xlsx')
 _lock = threading.Lock()
@@ -28,6 +31,48 @@ CREATE INDEX IF NOT EXISTS ix_jobs_active ON jobs(active);
 """
 
 
+@functools.lru_cache(maxsize=16384)  # ayni ilan metinleri her aramada yeniden sadelestirilmesin (aciklamada arama ~10x hizlanir)
+def fold(s):
+    """Arama/siralama icin metni sadelestirir: buyuk-kucuk harf ve Turkce/aksan farki yok sayilir
+    (Izmir = İZMİR = izmir, yazılım = yazilim, Şirket = sirket)."""
+    if not s:
+        return ''
+    s = str(s)
+    if not s.isascii():
+        s = unicodedata.normalize('NFKD', s.replace('ı', 'i'))
+        s = ''.join(ch for ch in s if not unicodedata.combining(ch))
+    return s.lower()
+
+
+NEW_DAYS = 3  # "yeni ilan" penceresi (gun); arayuzdeki "3 gun" secimiyle ayni
+_ISO = "j.posted GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'"
+# Bir ilan "yeni" sayilir: yayin tarihi pencerede YA DA kaynagin ilk taramasindan SONRA bulunmus ve ilk gorulme tarihi pencerede.
+# Ilk taramadaki ilanlar siteye o gun eklenmedi, yalnizca o gun ilk kez goruldu; yayin tarihi de yoksa yeni sayilmaz.
+# jobs tablosu 'j' takma adiyla kullanilmali; iki '?' alir: (yayin esigi, ilk gorulme esigi), ikisi de cutoff(gun).
+RECENT = f"(({_ISO} AND j.posted >= ?) OR (j.is_baseline=0 AND j.first_seen >= ?))"
+
+
+def cutoff(days):
+    return (dt.date.today() - dt.timedelta(days=days)).isoformat()
+
+
+# "Bana uygun" (arayuzdeki hazir filtre ile ayni): junior / staj, yazilim-teknik, Turkiye / uzaktan / konumu belirtilmemis.
+# jobs tablosu 'j' takma adiyla kullanilmali.
+FIT_LEVELS = ('Junior / Yeni mezun', 'Staj')
+FIT = "(j.level IN ('Junior / Yeni mezun','Staj') AND j.is_tech=1 AND j.region IN ('Türkiye','Uzaktan','Belirtilmemiş'))"
+
+
+def search_clauses(q, cols):
+    """Arama kutusu metnini SQL kosullarina cevirir: her kelime sutunlardan en az birinde gecmeli (kelime sirasi onemsiz).
+    Dondurur: ([kosul, ...], [arguman, ...]). Sutunlar trn() ile sadelestirilir."""
+    clauses, args = [], []
+    for w in fold(q).split():
+        w = w.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+        clauses.append('(' + ' OR '.join(f"trn({c}) LIKE ? ESCAPE '\\'" for c in cols) + ')')
+        args += [f'%{w}%'] * len(cols)
+    return clauses, args
+
+
 def connect():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     con = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
@@ -38,15 +83,25 @@ def connect():
     for col in ('ats_extra', 'checked_at', 'merged_into', 'program_urls', 'program_checked'):
         if col not in cols:
             con.execute(f'ALTER TABLE companies ADD COLUMN {col} TEXT')
-    jcols = {r[1] for r in con.execute('PRAGMA table_info(jobs)')}
-    for col, typ in (('region', 'TEXT'), ('description', 'TEXT'), ('exp_min', 'INTEGER'), ('detail_checked', 'INTEGER'),
-                     ('detail_kind', 'TEXT'), ('detail_url', 'TEXT'), ('starred', 'INTEGER DEFAULT 0'), ('note', 'TEXT')):
-        if col not in jcols:
-            con.execute(f'ALTER TABLE jobs ADD COLUMN {col} {typ}')
     con.execute('''CREATE TABLE IF NOT EXISTS source_runs(
         id INTEGER PRIMARY KEY, run_at TEXT, company_id INTEGER, source TEXT, ok INTEGER, count INTEGER,
         new INTEGER, closed INTEGER, prev_active INTEGER, overlap REAL, error TEXT)''')
     con.execute('CREATE INDEX IF NOT EXISTS ix_runs_company ON source_runs(company_id, id)')
+    jcols = {r[1] for r in con.execute('PRAGMA table_info(jobs)')}
+    for col, typ in (('region', 'TEXT'), ('description', 'TEXT'), ('exp_min', 'INTEGER'), ('detail_checked', 'INTEGER'),
+                     ('detail_kind', 'TEXT'), ('detail_url', 'TEXT'), ('starred', 'INTEGER DEFAULT 0'), ('note', 'TEXT'),
+                     ('is_baseline', 'INTEGER DEFAULT 0'), ('seen', 'INTEGER DEFAULT 0')):
+        if col not in jcols:
+            con.execute(f'ALTER TABLE jobs ADD COLUMN {col} {typ}')
+            if col == 'is_baseline':  # eski kayitlar: kaynagin daha onceki bir gunde basarili taramasi yoksa ilk taramadandir
+                con.execute('''UPDATE jobs SET is_baseline = CASE WHEN EXISTS(
+                                 SELECT 1 FROM source_runs r WHERE r.company_id=jobs.company_id AND r.source=jobs.source AND r.ok=1
+                                 AND substr(r.run_at,1,10) < jobs.first_seen) THEN 0 ELSE 1 END''')
+                con.commit()
+            elif col == 'seen':  # kullanicinin zaten islem yaptigi ilanlar gorulmus sayilir
+                con.execute("UPDATE jobs SET seen=1 WHERE applied=1 OR hidden=1 OR starred=1 OR (note IS NOT NULL AND note!='')")
+                con.commit()
+    con.create_function('trn', 1, fold, deterministic=True)  # arama / siralama: SQL'de trn(sutun)
     return con
 
 

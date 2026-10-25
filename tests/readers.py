@@ -18,7 +18,8 @@ CASES = [
     ('breezy_socradar', 'ats', 'breezy', ('socradar',)),
     ('manatal_netgsm', 'ats', 'manatal', ('netgsm',)),
     ('jazzhr_modanisa', 'ats', 'jazzhr', ('modanisa',)),
-    ('workday_oyakrenault', 'ats', 'workday', None),   # slug/extra veritabanindan
+    ('workday_oyakrenault', 'ats', 'workday', None),   # slug/extra veritabanindan; hesapta Turkiye ilani yok (kesin bos liste)
+    ('workday_accenture', 'ats', 'workday', ('accenture', 'wd103|AccentureCareers')),  # Turkiye ulke filtresi uygulanir
     ('teamtailor_pulsetto', 'ats', 'teamtailor', None),
     ('personio_kunbus', 'ats', 'personio', None),
     ('custom_turkcell', 'custom', 'turkcell', ()),

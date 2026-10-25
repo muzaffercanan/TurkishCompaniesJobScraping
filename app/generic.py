@@ -1,6 +1,9 @@
 """ATS'i olmayan (ya da okuyucusu olmayan) kariyer sayfalarindan ilan cikarma.
-Kural tabanli: ilan adresi kaliplari + is unvani kelimeleri. LLM kullanilmaz."""
+Once sayfadaki yapilandirilmis veri (schema.org JobPosting, application/ld+json), sonra kural tabanli: ilan adresi kaliplari
++ is unvani kelimeleri. LLM kullanilmaz."""
+import datetime as dt
 import html as html_lib
+import json
 import re
 import urllib.parse
 
@@ -50,10 +53,91 @@ def _clean_title(t):
     return t.strip(' -|·•:')
 
 
-def extract(page_url, links):
+_LD = re.compile(r'<script\b[^>]*type=["\']?application/ld\+json["\']?[^>]*>(.*?)</script>', re.S | re.I)
+
+
+def _ld_nodes(d):
+    """JSON-LD agacindaki tum nesneler (@graph, ItemList > ListItem > item, ic ice listeler)."""
+    if isinstance(d, list):
+        for x in d:
+            yield from _ld_nodes(x)
+    elif isinstance(d, dict):
+        yield d
+        for k in ('@graph', 'itemListElement', 'item', 'mainEntity'):
+            if k in d:
+                yield from _ld_nodes(d[k])
+
+
+def _ld_str(v):
+    if isinstance(v, dict):
+        v = v.get('name') or v.get('value') or v.get('@id') or ''
+    if isinstance(v, list):
+        return ', '.join(filter(None, (_ld_str(x) for x in v)))
+    return text(str(v)) if v is not None else ''
+
+
+def _ld_location(p):
+    """jobLocation (Place / PostalAddress, tek ya da liste) -> 'Sehir, Ulke' ; uzaktan ilanlarda basvuru ulkesi."""
+    places = p.get('jobLocation') or []
+    out = []
+    for pl in places if isinstance(places, list) else [places]:
+        addr = pl.get('address', pl) if isinstance(pl, dict) else pl
+        if isinstance(addr, dict):
+            parts = [_ld_str(addr.get(k)) for k in ('addressLocality', 'addressRegion', 'addressCountry')]
+            s = ', '.join(dict.fromkeys(x for x in parts if x))
+        else:
+            s = _ld_str(addr)
+        if s and s not in out:
+            out.append(s)
+    if not out and p.get('applicantLocationRequirements'):
+        out.append(_ld_str(p['applicantLocationRequirements']))
+    return '; '.join(out)[:200]
+
+
+def jsonld_jobs(page_url, html):
+    """Sayfadaki schema.org JobPosting kayitlari. Google'da ilan olarak gorunmek isteyen siteler koyar: baslik, konum,
+    yayin tarihi ve aciklama yapilandirilmis gelir. Son basvuru tarihi gecmis ilanlar alinmaz.
+    Dondurur: [{id,title,location,team,url,posted,remote,desc}]"""
+    out, seen, today = [], set(), dt.date.today().isoformat()
+    for m in _LD.finditer(html or ''):
+        raw = re.sub(r'^\s*(<!--|<!\[CDATA\[)|(-->|\]\]>)\s*$', '', m.group(1).strip())
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            continue
+        for p in _ld_nodes(data):
+            types = p.get('@type')
+            if 'JobPosting' not in (types if isinstance(types, list) else [types]):
+                continue
+            title = _ld_str(p.get('title') or p.get('name'))[:140]
+            valid = str(p.get('validThrough') or '')[:10]
+            if not title or (re.match(r'\d{4}-\d{2}-\d{2}$', valid) and valid < today):
+                continue
+            url = urllib.parse.urljoin(page_url, str(p.get('url') or p.get('sameAs') or '')) if (p.get('url') or p.get('sameAs')) else ''
+            key = (url or f'{page_url.split("#")[0]}#{_ld_str(p.get("identifier")) or title}').rstrip('/')
+            if key in seen:
+                continue
+            seen.add(key)
+            posted = str(p.get('datePosted') or '')[:10]
+            out.append(dict(id=key, title=title, location=_ld_location(p), team=_ld_str(p.get('occupationalCategory'))[:100],
+                            url=url or page_url, posted=posted if re.match(r'\d{4}-\d{2}-\d{2}$', posted) else None,
+                            remote=str(p.get('jobLocationType') or '').upper() == 'TELECOMMUTE',
+                            desc=text(html_lib.unescape(str(p.get('description') or ''))),
+                            detail=None if url else (None, None)))  # kendi adresi yoksa liste sayfasi detay diye cekilmesin
+    return out
+
+
+def extract(page_url, links, html=''):
     """links: [(href, link_text, nearby_heading[, container_sig])] -> [{id,title,location,team,url,posted,remote}]
-    Iki yol: (1) ilan adresi kalibi + unvan kelimesi; (2) "liste kumesi": ayni kapsayicida yan yana duran, cogu unvan
-    kelimesi tasiyan >=2 baglanti (adresleri ilan kalibina uymasa da). Tek basina duran urun/haber baglantilari elenir."""
+    Once sayfadaki JobPosting kayitlari (html verildiyse; konum/tarih/aciklama ile). Sonra iki yol: (1) ilan adresi kalibi +
+    unvan kelimesi; (2) "liste kumesi": ayni kapsayicida yan yana duran, cogu unvan kelimesi tasiyan >=2 baglanti (adresleri
+    ilan kalibina uymasa da). Tek basina duran urun/haber baglantilari elenir. Ayni adres iki yoldan gelirse JobPosting kalir."""
+    ld = jsonld_jobs(page_url, html)
+    ld_keys = {j['id'].rstrip('/') for j in ld} | {j['url'].rstrip('/') for j in ld if j['url'] != page_url}
+    return ld + [j for j in _extract_links(page_url, links) if j['id'].rstrip('/') not in ld_keys]
+
+
+def _extract_links(page_url, links):
     base = host_of(page_url)
     page_path = urllib.parse.urlparse(page_url).path.rstrip('/')
     seen, out = set(), []

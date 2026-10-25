@@ -8,7 +8,7 @@ import webbrowser
 
 from flask import Flask, g, jsonify, request, send_from_directory
 
-from . import db, scanner, search, seniority
+from . import auto, db, notify, scanner, search, seniority, util
 
 HOST = '127.0.0.1'
 PORT = int(sys.argv[sys.argv.index('--port') + 1]) if '--port' in sys.argv else 8765
@@ -56,19 +56,27 @@ def _distinct(col, table='companies'):
     return [r[0] for r in g.con.execute(f'SELECT DISTINCT {col} FROM {table} WHERE {col} IS NOT NULL AND {col}!="" ORDER BY 1')]
 
 
+NEW_DAYS, RECENT = db.NEW_DAYS, db.RECENT
+
+
+def _cutoff(days):
+    return db.cutoff(days)
+
+
 @app.get('/api/meta')
 def meta():
     last = g.con.execute('SELECT * FROM scans ORDER BY id DESC LIMIT 1').fetchone()
     st = {r[0] or 'taranmadi': r[1] for r in g.con.execute('SELECT status, COUNT(*) FROM companies GROUP BY status')}
-    today = dt.date.today().isoformat()
-    counts = dict(g.con.execute('''SELECT
-        COALESCE(SUM(active=1 AND hidden=0 AND first_seen=?), 0) AS new_today,
-        COALESCE(SUM(active=1 AND hidden=0 AND level IN ('Junior / Yeni mezun','Staj')), 0) AS entry,
-        COALESCE(SUM(starred=1), 0) AS starred, COALESCE(SUM(applied=1), 0) AS applied,
-        COALESCE(SUM(hidden=1), 0) AS hidden FROM jobs''', (today,)).fetchone())
+    cut = _cutoff(NEW_DAYS)
+    counts = dict(g.con.execute(f'''SELECT
+        COALESCE(SUM(j.active=1 AND j.hidden=0 AND {RECENT}), 0) AS fresh,
+        COALESCE(SUM(j.active=1 AND j.hidden=0 AND j.seen=0 AND {db.FIT} AND {RECENT}), 0) AS fit_new,
+        COALESCE(SUM(j.active=1 AND j.hidden=0 AND j.level IN ('Junior / Yeni mezun','Staj')), 0) AS entry,
+        COALESCE(SUM(j.starred=1), 0) AS starred, COALESCE(SUM(j.applied=1), 0) AS applied,
+        COALESCE(SUM(j.hidden=1), 0) AS hidden FROM jobs j''', (cut, cut, cut, cut)).fetchone())
     return jsonify(
         code_stale=_code_stamp() > CODE_STAMP + 1,  # diskteki kod, calisan sunucudan yeni: yeniden baslatilmali
-        counts=counts,
+        counts=counts, auto=auto.status(g.con),
         categories=_distinct('category'), cities=_distinct('city'), sizes=_distinct('size'),
         sources=_distinct('source', 'jobs'), levels=seniority.LEVELS,
         statuses=st,
@@ -77,6 +85,10 @@ def meta():
                     jobs=g.con.execute('SELECT COUNT(*) FROM jobs WHERE active=1').fetchone()[0],
                     companies_with_jobs=g.con.execute('SELECT COUNT(DISTINCT company_id) FROM jobs WHERE active=1').fetchone()[0]),
         last_scan=dict(last) if last else None)
+
+
+SIZE_RANK = ("CASE WHEN c.size LIKE 'Büyük%' THEN 0 WHEN c.size LIKE 'Orta%' THEN 1 WHEN c.size LIKE 'Küçük%' THEN 2 "
+             "ELSE 3 END")
 
 
 @app.get('/api/jobs')
@@ -95,13 +107,13 @@ def jobs():
         where.append('j.applied=1')
     if a.get('starred') == 'only':
         where.append('j.starred=1')
-    if a.get('q'):
-        if a.get('indesc') == '1':  # ilan aciklamasinda da ara (or. "python", "0-2 yil")
-            where.append('(j.title LIKE ? OR c.name LIKE ? OR j.location LIKE ? OR j.team LIKE ? OR j.description LIKE ?)')
-            args += [f'%{a["q"]}%'] * 5
-        else:
-            where.append('(j.title LIKE ? OR c.name LIKE ? OR j.location LIKE ? OR j.team LIKE ?)')
-            args += [f'%{a["q"]}%'] * 4
+    if a.get('unseen') == '1':
+        where.append('j.seen=0')
+    if a.get('q'):  # kelimeler AND; Turkce harf / buyuk-kucuk farki yok; indesc: aciklamada da ara (or. "python", "0-2 yil")
+        cols = ['j.title', 'c.name', 'j.location', 'j.team'] + (['j.description'] if a.get('indesc') == '1' else [])
+        cl, ar = db.search_clauses(a['q'], cols)
+        where += cl
+        args += ar
     for key, col in (('category', 'c.category'), ('city', 'c.city'), ('size', 'c.size'), ('source', 'j.source'), ('level', 'j.level')):
         vals = [v for v in a.getlist(key) if v]
         if vals:
@@ -116,19 +128,24 @@ def jobs():
     if a.get('tech') == '1':
         where.append('j.is_tech=1')
     if a.get('days'):
-        where.append('j.first_seen >= ?')
-        args.append((dt.date.today() - dt.timedelta(days=int(a['days']))).isoformat())
+        cut = _cutoff(int(a['days']))
+        where.append(RECENT)
+        args += [cut, cut]
     if a.get('company_id'):
         where.append('j.company_id=?')
         args.append(int(a['company_id']))
-    order = {'new': 'j.first_seen DESC, j.id DESC', 'company': 'c.name, j.title', 'title': 'j.title',
+    # Ayni firmanin ilanlari her zaman alt alta; firmalar buyukten kucuge (Buyuk > Orta > Kucuk > Bilinmiyor,
+    # ayni buyuklukte aktif ilani cok olan once). 'Sirala' secimi firma icindeki ilan sirasidir.
+    inner = {'new': 'j.first_seen DESC, j.id DESC', 'title': 'trn(j.title), j.id',
              'posted': 'COALESCE(j.posted, j.first_seen) DESC'}.get(a.get('sort'), 'j.first_seen DESC, j.id DESC')
+    order = f'{SIZE_RANK}, c.job_count DESC, trn(c.name), c.id, {inner}'
+    cut = _cutoff(NEW_DAYS)
     rows = g.con.execute(f'''SELECT j.id, j.company_id, j.source, j.title, j.location, j.team, j.url, j.posted, j.first_seen, j.last_seen,
-                           j.active, j.level, j.is_tech, j.applied, j.hidden, j.starred, j.region, j.exp_min,
-                           (j.note IS NOT NULL AND j.note!='') AS has_note,
+                           j.active, j.level, j.is_tech, j.applied, j.hidden, j.starred, j.seen, j.region, j.exp_min,
+                           (j.note IS NOT NULL AND j.note!='') AS has_note, {RECENT} AS is_new,
                            c.name AS company, c.category, c.city AS company_city, c.size, c.website
                            FROM jobs j JOIN companies c ON c.id=j.company_id WHERE {" AND ".join(where)}
-                           ORDER BY {order} LIMIT 5000''', args).fetchall()
+                           ORDER BY {order} LIMIT 5000''', [cut, cut] + args).fetchall()
     return jsonify([dict(r) for r in rows])
 
 
@@ -145,12 +162,26 @@ def job_detail(jid):
 @app.post('/api/jobs/<int:jid>')
 def job_update(jid):
     d = request.get_json(force=True)
-    for f in ('applied', 'hidden', 'starred'):
+    for f in ('applied', 'hidden', 'starred', 'seen'):
         if f in d:
             db.write(g.con, f'UPDATE jobs SET {f}=? WHERE id=?', (1 if d[f] else 0, jid))
     if 'note' in d:
         db.write(g.con, 'UPDATE jobs SET note=? WHERE id=?', ((d['note'] or '').strip()[:4000] or None, jid))
+    if 'seen' not in d and (any(d.get(f) for f in ('applied', 'hidden', 'starred')) or (d.get('note') or '').strip()):
+        db.write(g.con, 'UPDATE jobs SET seen=1 WHERE id=?', (jid,))  # uzerinde islem yapilan ilan gorulmus sayilir
     return jsonify(ok=True)
+
+
+@app.post('/api/jobs/seen')
+def jobs_seen():
+    """Toplu 'goruldu' (ya da geri alma): {ids:[...], seen:true|false}"""
+    d = request.get_json(force=True)
+    ids = [i for i in d.get('ids', []) if isinstance(i, int)][:20000]
+    val = 1 if d.get('seen', True) else 0
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        db.write(g.con, f'UPDATE jobs SET seen=? WHERE id IN ({",".join("?" * len(chunk))})', [val, *chunk])
+    return jsonify(ok=True, n=len(ids))
 
 
 @app.get('/api/companies')
@@ -158,13 +189,14 @@ def companies():
     a = request.args
     where, args = ['1=1'], []
     if a.get('q'):
-        where.append('(name LIKE ? OR website LIKE ?)')
-        args += [f'%{a["q"]}%'] * 2
+        cl, ar = db.search_clauses(a['q'], ['name', 'website'])
+        where += cl
+        args += ar
     if a.get('status'):
         where.append("COALESCE(status,'taranmadi')=?")
         args.append(a['status'])
     rows = g.con.execute(f'''SELECT * FROM companies WHERE {" AND ".join(where)}
-                           ORDER BY job_count DESC, name LIMIT 3000''', args).fetchall()
+                           ORDER BY job_count DESC, trn(name) LIMIT 3000''', args).fetchall()
     return jsonify([dict(r) for r in rows])
 
 
@@ -212,7 +244,7 @@ def health():
         d = dict(r)
         if d['source'] == 'kesif' and d['ok']:
             continue  # ilan kaynagi olmayan firma: saglik listesinde gosterilmez
-        flags = scanner.health_flags(d['prev_active'] or 0, d['count'] or 0, d['overlap'])
+        flags = scanner.health_flags(d['prev_active'] or 0, d['count'] or 0, d['overlap'], d['source'])
         if not d['ok']:
             flags.insert(0, 'son tarama hata verdi: ' + (d['error'] or '')[:120])
         if d['count'] == 0 and (d['prev_count'] or 0) > 0:
@@ -236,6 +268,25 @@ def scan():
     if mode == 'site' and not (search.load_config().get('brave_api_key') or '').strip():
         return jsonify(started=False, error='Önce Firmalar sekmesinden arama API anahtarını gir.')
     return jsonify(started=scanner.start(mode if mode in ('hizli', 'tam', 'yeni', 'site', 'program') else 'hizli'))
+
+
+@app.get('/api/auto')
+def auto_get():
+    return jsonify(auto.status(g.con))
+
+
+@app.post('/api/auto')
+def auto_set():
+    """Otomatik tarama ayarlari: {enabled, hours (6|12|24|48), notify}; gonderilmeyen alan degismez."""
+    auto.save(request.get_json(silent=True) or {})
+    return jsonify(auto.status(g.con))
+
+
+@app.post('/api/auto/test')
+def auto_test():
+    ok, err = notify.toast('İlan Radarı bildirimi çalışıyor', ['Otomatik taramada sana uygun yeni ilan çıkarsa böyle haber vereceğim.'],
+                           notify.BASE_URL + '#fit')
+    return jsonify(ok=ok, error=err)
 
 
 @app.get('/api/scan/status')
@@ -265,6 +316,11 @@ def main():
         return
     if os.environ.get('NO_BROWSER') != '1' and '--no-browser' not in sys.argv:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    util.setup_file_log(os.path.join(db.ROOT, 'data', 'logs', 'tarama.log'))
+    util.log.info('uygulama acildi: %s', url)
+    notify.BASE_URL = url
+    if '--no-auto' not in sys.argv:  # test sunucusu gercek tarama baslatmasin diye --no-auto
+        auto.start_thread()
     print(f'Uygulama acik: {url}  (kapatmak icin bu pencereyi kapatin)')
     app.run(host=HOST, port=PORT, debug=False, threaded=True)
 

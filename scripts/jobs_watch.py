@@ -73,7 +73,8 @@ def workable(slug):
                  team=j.get('department') or '', url=j.get('url', ''), posted=date10(j.get('published_on')), remote=bool(j.get('telecommuting'))) for j in d.get('jobs', [])]
 
 
-import adapters  # firmaya ozel okuyucular (scripts/adapters.py)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from app import custom as adapters  # noqa: E402 - firmaya ozel okuyucular: uygulamadakiyle ayni kod (eski kopya scripts/adapters.py kaldirildi)
 
 FETCH = {'lever': lever, 'greenhouse': greenhouse, 'ashby': ashby, 'recruitee': recruitee, 'workable': workable,
          'custom': lambda slug: adapters.REGISTRY[slug]()}

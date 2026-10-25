@@ -22,7 +22,7 @@ const LEVELS = {
 const STATUS = {
   ats:['ATS (API)','ok'], ozel:['Özel okuyucu','ok'], genel:['Genel ayrıştırıcı','warn'], 'sayfa-var-ilan-yok':['Sayfa var, ilan yok',''],
   yonlendirme:['Kariyer.net/LinkedIn',''], 'kariyer-yok':['Kariyer sayfası yok',''], 'site-yok':['Site bilinmiyor','bad'],
-  erisilemedi:['Erişilemedi','bad'], 'ilan-sitesi':['İlan sitesi (taranmaz)',''], mukerrer:['Mükerrer (taranmaz)',''], hata:['Hata','bad'], taranmadi:['Taranmadı',''],
+  erisilemedi:['Erişilemedi','bad'], 'ilan-sitesi':['İlan sitesi (taranmaz)',''], robots:['robots.txt engeli',''], mukerrer:['Mükerrer (taranmaz)',''], hata:['Hata','bad'], taranmadi:['Taranmadı',''],
 };
 const REGION_LABEL = {'tr+':'Türkiye + uzaktan', 'Türkiye':'Türkiye', 'Uzaktan':'Uzaktan', 'Yurt dışı':'Yurt dışı'};
 const DAY_OPTS = [['', 'Hepsi'], ['0', 'Bugün'], ['3', '3 gün'], ['7', '7 gün'], ['30', '30 gün']];
@@ -33,9 +33,10 @@ const EXP_RE = /\b\d{1,2}(?:\s*[-–]\s*\d{1,2})?\+?\s*(?:years?\b|yrs?\b|yıl|y
 
 // ---------------------------------------------------------------- durum
 const DEFAULTS = {q:'', indesc:false, levels:[], days:'', region:'', category:'', city:'', size:'', source:'', tech:false,
-  hideApplied:false, closed:false, view:'all', sort:'new', group:false, dense:false};
+  hideApplied:false, closed:false, unseen:false, view:'all', sort:'new', group:false, dense:false};
 const S = Object.assign({}, DEFAULTS, store.get('state', {}));
 S.levels = new Set(S.levels || []);
+if(!['new', 'posted', 'title'].includes(S.sort)) S.sort = 'new';  // firmalar her zaman buyukten kucuge; secim firma ici siradir
 S.companyId = null; S.companyName = '';
 const saveState = () => store.set('state', {...S, levels:[...S.levels], companyId:undefined, companyName:undefined});
 
@@ -60,20 +61,23 @@ function relTime(iso){
   if(m < 1) return 'az önce'; if(m < 60) return `${m} dk önce`;
   const h = Math.round(m / 60); return h < 24 ? `${h} sa önce` : `${Math.round(h / 24)} gün önce`;
 }
+// Arama için sadeleştirme (sunucudaki db.fold ile aynı kural): büyük/küçük harf ve Türkçe/aksan farkı yok sayılır.
+// Uzunluğu korur, böylece eşleşme konumları özgün metne uygulanabilir.
+const fold = s => { const f = s.replace(/[À-ɏ]/g, c => c.normalize('NFD')[0]).replace(/ı/g, 'i').toLowerCase(); return f.length === s.length ? f : s.toLowerCase(); };
 function highlight(text, specs){
-  text = text ?? ''; const ms = [];
-  for(const {re, cls} of specs){ re.lastIndex = 0; let m;
-    while((m = re.exec(text))){ if(!m[0]){ re.lastIndex++; continue; } ms.push({s:m.index, e:m.index + m[0].length, cls}); } }
+  text = text ?? ''; const ms = []; let folded = null;
+  for(const {re, cls, fold:f} of specs){ re.lastIndex = 0; let m; const hay = f ? (folded ??= fold(text)) : text;
+    while((m = re.exec(hay))){ if(!m[0]){ re.lastIndex++; continue; } ms.push({s:m.index, e:m.index + m[0].length, cls}); } }
   ms.sort((a, b) => a.s - b.s || b.e - a.e);
   let out = '', pos = 0;
   for(const m of ms){ if(m.s < pos) continue;
     out += esc(text.slice(pos, m.s)) + `<mark${m.cls ? ` class="${m.cls}"` : ''}>${esc(text.slice(m.s, m.e))}</mark>`; pos = m.e; }
   return out + esc(text.slice(pos));
 }
-const hl = s => TERM_RE ? highlight(s, [{re:TERM_RE}]) : esc(s);
+const hl = s => TERM_RE ? highlight(s, [{re:TERM_RE, fold:true}]) : esc(s);
 function buildTerms(){
-  const t = S.q.trim().split(/\s+/).filter(w => w.length >= 2).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  TERM_RE = t.length ? new RegExp(t.join('|'), 'gi') : null;
+  const t = fold(S.q.trim()).split(/\s+/).filter(w => w.length >= 2).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  TERM_RE = t.length ? new RegExp(t.join('|'), 'g') : null;
 }
 function countUp(el, to){
   if(matchMedia('(prefers-reduced-motion:reduce)').matches || to < 2){ el.textContent = fmt(to); return; }
@@ -153,19 +157,82 @@ async function loadMeta(){
   cs.innerHTML = '<option value="">Tüm durumlar</option>' + Object.entries(meta.statuses).sort((a, b) => b[1] - a[1])
     .map(([k, n]) => `<option value="${k}">${(STATUS[k] || [k])[0]} (${n})</option>`).join('');
   cs.value = cv;
-  renderFresh(); buildViews(); syncUI();
+  renderFresh(); buildViews(); syncUI(); renderFitBar(); renderAuto();
   if(!kpiShown){ kpiShown = true; renderKpis(true); }
 }
 let kpiShown = false, metaAt = 0;
+const HOURS_LABEL = {6:'6 saatte bir', 12:'12 saatte bir', 24:'günde bir', 48:'2 günde bir'};
 function renderFresh(){
-  const f = $('#fresh'), ls = meta?.last_scan;
-  if(!ls || !ls.finished){ f.className = 'fresh'; $('#freshtxt').textContent = ls ? 'Tarama sürüyor…' : 'Henüz tarama yok'; return; }
+  const f = $('#fresh'), ls = meta?.last_scan, a = meta?.auto;
+  const auto = a ? (a.enabled ? ` · Otomatik tarama açık (${HOURS_LABEL[a.hours]})` : ' · Otomatik tarama kapalı') + ' — ayarlar için tıkla' : '';
+  if(!ls || !ls.finished){ f.className = 'fresh'; $('#freshtxt').textContent = ls ? 'Tarama sürüyor…' : 'Henüz tarama yok'; f.title = auto.slice(3); return; }
   const h = (Date.now() - new Date(ls.finished)) / 36e5;
   f.className = 'fresh ' + (h < 24 ? 'ok' : h < 72 ? 'warn' : 'old');
   $('#freshtxt').textContent = 'Son tarama: ' + relTime(ls.finished);
-  f.title = 'Son tarama: ' + ls.finished.slice(0, 16).replace('T', ' ') + (h >= 72 ? ' — veriler eskimiş olabilir, yeni tarama başlat' : '');
+  f.title = 'Son tarama: ' + ls.finished.slice(0, 16).replace('T', ' ') + (h >= 72 && !a?.enabled ? ' — veriler eskimiş olabilir, yeni tarama başlat' : '') + auto;
 }
 setInterval(renderFresh, 60000);
+
+// ---------------------------------------------------------------- otomatik tarama ayarları
+function inFuture(iso){
+  const m = Math.round((new Date(iso) - Date.now()) / 6e4);
+  return m <= 0 ? 'birazdan' : m < 60 ? `${m} dk sonra` : `${Math.floor(m / 60)} sa${m % 60 ? ' ' + (m % 60) + ' dk' : ''} sonra`;
+}
+function renderAuto(){
+  const a = meta?.auto; if(!a) return;
+  $('#autoOn').checked = a.enabled; $('#autoHours').value = a.hours; $('#autoNotify').checked = a.notify;
+  $('#autoHours').disabled = $('#autoNotify').disabled = !a.enabled; $('#autoNow').disabled = a.running;
+  $('#autoInfo').textContent = !a.enabled ? 'Otomatik tarama kapalı; taramayı sen başlatırsın.'
+    : !a.last_at ? 'Henüz tarama yapılmadı: ilk taramayı elle başlat, sonrası otomatik olur.'
+    : a.running ? 'Şu an tarama sürüyor.'
+    : `Son tarama: ${a.last_at.slice(0, 16).replace('T', ' ')} · Sonraki: ${inFuture(a.next_at)}`;
+}
+async function saveAuto(patch){
+  try{ meta.auto = await post('/api/auto', patch); }catch{ toast('Ayar kaydedilemedi', {err:true}); }
+  renderAuto(); renderFresh();
+}
+function toggleAuto(open){
+  const p = $('#autoPop'); open = open ?? p.hidden; p.hidden = !open; $('#fresh').setAttribute('aria-expanded', open);
+  if(open){ renderAuto(); refreshCounts(); }
+}
+$('#fresh').onclick = () => toggleAuto();
+$('#autoOn').onchange = e => saveAuto({enabled:e.target.checked});
+$('#autoHours').onchange = e => saveAuto({hours:+e.target.value});
+$('#autoNotify').onchange = e => saveAuto({notify:e.target.checked});
+$('#autoNow').onclick = () => { toggleAuto(false); startScan('hizli'); };
+$('#autoTest').onclick = async () => {
+  const b = $('#autoTest'); b.disabled = true;
+  try{ const r = await post('/api/auto/test');
+    toast(r.ok ? 'Test bildirimi gönderildi; birkaç saniye içinde masaüstünde görünmeli' : 'Bildirim gönderilemedi: ' + (r.error || 'bilinmeyen hata'), {err:!r.ok, ms:r.ok ? 4500 : 10000});
+  }catch{ toast('Bildirim gönderilemedi', {err:true}); }
+  b.disabled = false;
+};
+
+// ---------------------------------------------------------------- "sana uygun" yeni ilan şeridi
+let scanPct = null;
+function updateTitle(){
+  const n = meta?.counts?.fit_new || 0;
+  document.title = scanPct != null ? `%${scanPct} · İlan Radarı` : (n ? `(${n}) ` : '') + 'İlan Radarı';
+}
+function renderFitBar(){
+  const n = meta?.counts?.fit_new || 0;
+  if(!n && store.get('fitHidden', 0)) store.set('fitHidden', 0);        // hepsi görüldü: bir sonraki yeni ilanda şerit yine çıksın
+  $('#fitbar').hidden = !(n > 0 && n > store.get('fitHidden', 0));
+  if(n) $('#fitTitle').textContent = `${fmt(n)} yeni ilan sana uygun`;
+  updateTitle();
+}
+function showFitNew(){   // şeridin sayısıyla aynı kural: bana uygun + son 3 gün + henüz görülmemiş
+  resetFilters(); S.levels = new Set(FIT_LEVELS); S.tech = true; S.region = 'tr+'; S.days = '3'; S.unseen = true;
+  show('jobs'); changed(); window.scrollTo({top:0});
+}
+$('#fitGo').onclick = showFitNew;
+$('#fitHide').onclick = () => { store.set('fitHidden', meta?.counts?.fit_new || 0); renderFitBar(); };
+// sayaçlar (yeni / sana uygun / favori…) işaret değişince hafifçe tazelenir; seçenek listelerine dokunmaz
+const refreshCounts = deb(async () => {
+  let m; try{ m = await api('/api/meta'); }catch{ return; }
+  Object.assign(meta, {counts:m.counts, auto:m.auto, totals:m.totals, last_scan:m.last_scan});
+  buildViews(); renderKpis(); renderFitBar(); renderFresh(); if(!$('#autoPop').hidden) renderAuto();
+}, 500);
 
 function renderKpis(first){
   const el = $('#kpis');
@@ -173,7 +240,7 @@ function renderKpis(first){
   const t = meta.totals, c = meta.counts, entryOn = S.levels.size === 2 && FIT_LEVELS.every(l => S.levels.has(l));
   const items = [
     ['all', 'briefcase', t.jobs, 'Aktif ilan', `${fmt(t.companies_with_jobs)} firmada`, '', !anyFilter() && S.view === 'all'],
-    ['today', 'sparkles', c.new_today, 'Bugün yeni', c.new_today ? 'son taramada bulundu' : 'bugün yeni ilan yok', 'good', S.days === '0'],
+    ['fresh', 'sparkles', c.fresh, 'Yeni ilan', c.fresh ? 'son 3 gün · ilk tarama hariç' : 'son 3 günde yeni ilan yok', 'good', S.days === '3' && !S.levels.size],
     ['entry', 'grad', c.entry, 'Junior & staj', 'giriş seviyesi ilanlar', 'warn', entryOn],
     ['firms', 'building', t.companies, 'Takip edilen firma', `${fmt(t.with_site)} sitesi bilinen`, 'blue', false],
   ];
@@ -183,7 +250,7 @@ function renderKpis(first){
 }
 $('#kpis').addEventListener('click', e => { const k = e.target.closest('[data-kpi]')?.dataset.kpi; if(!k) return;
   if(k === 'firms') return show('companies');
-  resetFilters(); if(k === 'today') S.days = '0'; if(k === 'entry') S.levels = new Set(FIT_LEVELS); changed(); });
+  resetFilters(); if(k === 'fresh') S.days = '3'; if(k === 'entry') S.levels = new Set(FIT_LEVELS); changed(); });
 
 // ---------------------------------------------------------------- filtreler
 function params(){
@@ -195,6 +262,7 @@ function params(){
   if(S.days !== '') p.set('days', S.days);
   if(S.region) p.set('region', S.region);
   if(S.tech) p.set('tech', '1');
+  if(S.unseen) p.set('unseen', '1');
   if(S.companyId) p.set('company_id', S.companyId);
   if(v === 'starred'){ p.set('starred', 'only'); p.set('active', '0'); p.set('hidden', '1'); }
   else if(v === 'applied'){ p.set('applied', 'only'); p.set('active', '0'); p.set('hidden', '1'); }
@@ -211,10 +279,10 @@ const POP_FILTERS = {
   hideApplied:() => S.hideApplied && ['hideApplied', 'Başvurulanlar gizli'], closed:() => S.closed && ['closed', 'Kapananlar dahil'],
 };
 const popTags = () => Object.values(POP_FILTERS).map(f => f()).filter(Boolean);
-const anyFilter = () => !!(popTags().length || S.companyId || S.q.trim() || S.levels.size || S.days !== '');
+const anyFilter = () => !!(popTags().length || S.companyId || S.q.trim() || S.levels.size || S.days !== '' || S.unseen);
 function resetFilters(){
   Object.assign(S, {q:'', indesc:false, levels:new Set(), days:'', region:'', category:'', city:'', size:'', source:'', tech:false,
-    hideApplied:false, closed:false, companyId:null, companyName:'', view:'all'});
+    hideApplied:false, closed:false, unseen:false, companyId:null, companyName:'', view:'all'});
 }
 function changed(){ syncUI(); loadJobs(); }
 function syncUI(){
@@ -228,7 +296,7 @@ function syncUI(){
   $$('#levels .chip').forEach(c => c.classList.toggle('on', S.levels.has(c.dataset.l)));
   $$('#daychips button').forEach(b => b.classList.toggle('on', b.dataset.d === S.days));
   $$('#views button').forEach(b => b.classList.toggle('on', b.dataset.v === S.view));
-  $('#presetFit').classList.toggle('on', fitOn());
+  $('#presetFit').classList.toggle('on', fitOn()); $('#unseenChip').classList.toggle('on', S.unseen);
   const pt = popTags(), n = pt.length;
   $('#fbadge').hidden = !n; $('#fbadge').textContent = n;
   const tags = [...pt]; if(S.companyId) tags.unshift(['company', 'Firma: ' + (S.companyName || '#' + S.companyId)]);
@@ -239,6 +307,7 @@ function syncUI(){
 }
 const fitOn = () => S.levels.size === 2 && FIT_LEVELS.every(l => S.levels.has(l)) && S.tech && S.region === 'tr+';
 $('#presetFit').onclick = () => { if(fitOn()){ S.levels = new Set(); S.tech = false; S.region = ''; } else { S.levels = new Set(FIT_LEVELS); S.tech = true; S.region = 'tr+'; } changed(); };
+$('#unseenChip').onclick = () => { S.unseen = !S.unseen; changed(); };
 $('#levels').addEventListener('click', e => { const l = e.target.closest('[data-l]')?.dataset.l; if(!l) return; S.levels.has(l) ? S.levels.delete(l) : S.levels.add(l); changed(); });
 $('#active').addEventListener('click', e => { const k = e.target.closest('[data-clr]')?.dataset.clr; if(!k) return;
   if(k === 'all') resetFilters(); else if(k === 'company'){ S.companyId = null; S.companyName = ''; } else S[k] = typeof S[k] === 'boolean' ? false : '';
@@ -249,8 +318,8 @@ $('#sort').onchange = e => { S.sort = e.target.value; changed(); };
 $('#q').addEventListener('input', e => { S.q = e.target.value; $('#qclear').hidden = !S.q; $('#qkbd').hidden = !!S.q; reload(); });
 $('#qclear').onclick = () => { S.q = ''; changed(); $('#q').focus(); };
 const reload = deb(() => changed());
-$('#fclear').onclick = () => { const q = S.q, lv = S.levels, d = S.days, v = S.view;
-  resetFilters(); S.q = q; S.levels = lv; S.days = d; S.view = v; changed(); };
+$('#fclear').onclick = () => { const q = S.q, lv = S.levels, d = S.days, v = S.view, u = S.unseen;
+  resetFilters(); S.q = q; S.levels = lv; S.days = d; S.view = v; S.unseen = u; changed(); };
 $('#fdone').onclick = () => togglePop(false);
 function togglePop(open){ const p = $('#fpop'); open = open ?? p.hidden; p.hidden = !open; $('#btnFilters').setAttribute('aria-expanded', open); }
 $('#btnFilters').onclick = () => togglePop();
@@ -277,15 +346,15 @@ const visible = r => S.view === 'starred' ? !!r.starred : S.view === 'applied' ?
   : !r.hidden && !(S.hideApplied && r.applied);
 
 function jobRow(r, grouped){
-  const lv = LEVELS[r.level] || LEVELS['Belirtilmemiş'], isNew = r.first_seen === TODAY;
+  const lv = LEVELS[r.level] || LEVELS['Belirtilmemiş'], isNew = !!r.is_new;
   const loc = r.location ? `<span class="mi loc" title="${esc(r.location)}">${icon('pin')}${hl(r.location)}</span>` : '';
   const rg = r.region === 'Uzaktan' ? '<span class="pill teal">Uzaktan</span>' : r.region === 'Yurt dışı' ? `<span class="pill na">${icon('globe')}Yurt dışı</span>` : '';
   const tip = `İlk görüldü: ${r.first_seen || '–'}` + (r.posted ? ` · Yayın: ${r.posted}` : '');
-  return `<article class="job${r.applied ? ' applied' : ''}${!r.active ? ' closed' : ''}${r.hidden ? ' ishidden' : ''}${grouped ? ' noav' : ''}${r.id === curId ? ' kb' : ''}" data-id="${r.id}">
+  return `<article class="job${r.seen ? '' : ' unseen'}${r.applied ? ' applied' : ''}${!r.active ? ' closed' : ''}${r.hidden ? ' ishidden' : ''}${grouped ? ' noav' : ''}${r.id === curId ? ' kb' : ''}" data-id="${r.id}">
     ${grouped ? '' : avatar(r.company)}
     <div class="jmain">
       <div class="jt"><a class="jlink" href="${esc(r.url)}" target="_blank" rel="noopener">${hl(r.title)}</a>
-        ${isNew ? '<span class="new">YENİ</span>' : ''}${!r.active ? '<span class="pill closed">kapandı</span>' : ''}${r.applied ? `<span class="pill ok">${icon('check')}Başvuruldu</span>` : ''}${r.has_note ? `<span class="note-ic" title="Notun var">${icon('note')}</span>` : ''}</div>
+        ${isNew ? '<span class="new" title="Son 3 günde eklendi">YENİ</span>' : ''}${!r.active ? '<span class="pill closed">kapandı</span>' : ''}${r.applied ? `<span class="pill ok">${icon('check')}Başvuruldu</span>` : ''}${r.has_note ? `<span class="note-ic" title="Notun var">${icon('note')}</span>` : ''}</div>
       <div class="jsub">${grouped ? '' : `<span class="co">${hl(r.company)}</span>`}${loc || (grouped ? '' : '<span class="mi faint">konum belirtilmemiş</span>')}${rg}<span class="pill ${lv.cls} only-sm">${esc(r.level)}</span>${r.team ? `<span class="mi" title="Takım / departman">${esc(r.team)}</span>` : ''}</div>
     </div>
     <div class="jmeta"><span class="pill ${lv.cls}">${esc(r.level)}</span>
@@ -335,8 +404,32 @@ function render(opts = {}){
   list.className = S.group ? 'groups' : 'list';
   if(S.group){ const gs = groupRows(cur); groupMap = new Map(gs.map(g => [g.id, g])); lazyJobs.fn = groupHtml; lazyJobs.batch = 16; lazyJobs.set(gs, opts.keep); }
   else { lazyJobs.fn = r => jobRow(r); lazyJobs.batch = 60; lazyJobs.set(cur, opts.keep); }
-  updateDrawerPos();
+  updateDrawerPos(); unseenBar();
 }
+
+// ---------------------------------------------------------------- görüldü işareti
+// Açılan ya da üzerinde işlem yapılan ilan görüldü sayılır; görülmeyenler kalın yazılır ve solunda nokta taşır.
+function unseenBar(){
+  const n = cur.reduce((k, r) => k + (r.seen ? 0 : 1), 0), b = $('#markAll');
+  b.hidden = !n; b.innerHTML = `<i class="dot2"></i>${fmt(n)} görülmemiş · tümünü görüldü say`;
+}
+function setSeenLocal(r, v){ r.seen = v ? 1 : 0; $(`#jlist .job[data-id="${r.id}"]`)?.classList.toggle('unseen', !v); }
+function markSeen(id, v = true){
+  const r = byId.get(id); if(!r || !!r.seen === !!v) return;
+  setSeenLocal(r, v); unseenBar(); post('/api/jobs/' + id, {seen:!!v}).then(refreshCounts, () => {});
+}
+async function bulkSeen(ids, v){
+  ids.forEach(id => { const r = byId.get(id); if(r) setSeenLocal(r, v); }); unseenBar();
+  try{ await post('/api/jobs/seen', {ids, seen:v}); }
+  catch{ ids.forEach(id => { const r = byId.get(id); if(r) setSeenLocal(r, !v); }); unseenBar(); toast('Kaydedilemedi, tekrar dene', {err:true}); return false; }
+  refreshCounts();
+  if(S.unseen) loadJobs();   // "Görülmemiş" süzgeci açıkken liste yeniden kurulur
+  return true;
+}
+$('#markAll').onclick = async () => {
+  const ids = cur.filter(r => !r.seen).map(r => r.id); if(!ids.length) return;
+  if(await bulkSeen(ids, true)) toast(`${fmt(ids.length)} ilan görüldü olarak işaretlendi`, {action:{label:'Geri al', fn:() => bulkSeen(ids, false)}, ms:8000});
+};
 
 // ---------------------------------------------------------------- imleç (klavye) & liste olayları
 const rowEls = () => $$('#jlist .job');
@@ -362,9 +455,12 @@ $('#jlist').addEventListener('click', e => {
   if(go) return openCompany(+go, groupMap.get(+go)?.name);
   if(!row) return;
   const link = e.target.closest('a');
-  if(link && !link.classList.contains('jlink')) return;                    // "İlana git" simgesi: normal bağlantı
-  if(link && (e.ctrlKey || e.metaKey || e.shiftKey || e.button)) return;   // ctrl+tık: ilanı yeni sekmede aç
+  if(link && !link.classList.contains('jlink')){ markSeen(+row.dataset.id); return; }                        // "İlana git" simgesi: normal bağlantı
+  if(link && (e.ctrlKey || e.metaKey || e.shiftKey || e.button)){ markSeen(+row.dataset.id); return; }       // ctrl+tık: ilanı yeni sekmede aç
   e.preventDefault(); openDrawer(+row.dataset.id);
+});
+$('#jlist').addEventListener('auxclick', e => {   // orta tuşla yeni sekmede açılan ilan da görüldü sayılır
+  const row = e.target.closest('.job'); if(row && e.button === 1 && e.target.closest('a')) markSeen(+row.dataset.id);
 });
 
 // ---------------------------------------------------------------- işaretler (favori / başvurdum / gizle)
@@ -376,11 +472,12 @@ const FLAG_MSG = {
 const FLAG_KEY = {star:'starred', applied:'applied', hide:'hidden'};
 async function setFlag(id, key, val, quiet){
   const r = byId.get(id); if(!r) return;
-  const prev = r[key]; r[key] = val ? 1 : 0;
+  const prev = r[key]; r[key] = val ? 1 : 0; if(val) r.seen = 1;   // sunucu da aynısını yapar
   if(meta) meta.counts[key] = Math.max(0, (meta.counts[key] || 0) + (val ? 1 : -1));
   buildViews(); render({keep:true}); syncDrawerFlags();
   try{ await post('/api/jobs/' + id, {[key]: !!val}); }
   catch{ r[key] = prev; render({keep:true}); syncDrawerFlags(); toast('Kaydedilemedi, tekrar dene', {err:true}); return; }
+  refreshCounts();
   if(!quiet && key !== 'starred') toast(FLAG_MSG[key][0](val), {action:{label:'Geri al', fn:() => setFlag(id, key, !val, true)}});
 }
 function neighborId(id){
@@ -407,7 +504,7 @@ function openDrawer(id){
   if(!drawerOpen()) lastFocus = document.activeElement;
   dId = id; setCursor(id, true); fillDrawer(r);
   drawer.classList.add('open'); scrim.classList.add('open'); document.body.style.overflow = 'hidden';
-  drawer.focus({preventScroll:true}); $('#dbody').scrollTop = 0; loadDetail(id);
+  drawer.focus({preventScroll:true}); $('#dbody').scrollTop = 0; loadDetail(id); markSeen(id);
 }
 function closeDrawer(){
   if(!drawerOpen()) return;
@@ -441,7 +538,7 @@ function syncDrawerFlags(){
   const r = byId.get(dId); if(!r) return;
   const lv = LEVELS[r.level] || LEVELS['Belirtilmemiş'];
   $('#dpills').innerHTML = `<span class="pill ${lv.cls}">${esc(r.level)}</span>` + (r.region === 'Uzaktan' ? '<span class="pill teal">Uzaktan</span>' : r.region === 'Yurt dışı' ? `<span class="pill na">${icon('globe')}Yurt dışı</span>` : r.region === 'Türkiye' ? '<span class="pill ok">Türkiye</span>' : '')
-    + (r.first_seen === TODAY ? '<span class="new">YENİ</span>' : '') + (!r.active ? '<span class="pill closed">kapandı</span>' : '')
+    + (r.is_new ? '<span class="new" title="Son 3 günde eklendi">YENİ</span>' : '') + (!r.active ? '<span class="pill closed">kapandı</span>' : '')
     + (r.applied ? `<span class="pill ok">${icon('check')}Başvuruldu</span>` : '') + (r.starred ? `<span class="pill warn">${icon('star')}Favori</span>` : '');
   $('#dstar').classList.toggle('on', !!r.starred); $('#dstar span').textContent = r.starred ? 'Favoride' : 'Favori';
   $('#dapplied').classList.toggle('on', !!r.applied); $('#dapplied span').textContent = r.applied ? 'Başvuruldu' : 'Başvurdum';
@@ -477,7 +574,7 @@ async function loadDetail(id){
   $('#dnote').value = f.note || '';
   const text = cleanDesc(f.description), box = $('#ddesc');
   if(!text){ box.innerHTML = '<p class="muted">Bu kaynak ilan açıklamasını vermiyor. Ayrıntı için ilanın kendi sayfasına bak.</p>'; return; }
-  const specs = [{re:new RegExp(EXP_RE.source, 'gi'), cls:'exp'}]; if(TERM_RE) specs.push({re:TERM_RE});
+  const specs = [{re:new RegExp(EXP_RE.source, 'gi'), cls:'exp'}]; if(TERM_RE) specs.push({re:TERM_RE, fold:true});
   const html = text.split(/\n{2,}/).map(p => `<p>${highlight(p, specs).replace(/\n/g, '<br>')}</p>`).join('');
   const long = text.length > 1800;
   box.innerHTML = `<div class="desc${long ? ' clamp' : ''}" id="dtext">${html}</div>${long ? '<button class="desc-more" id="dmore">Tamamını göster</button>' : ''}`;
@@ -617,7 +714,7 @@ function show(t){
 }
 $('#tabs').addEventListener('click', e => { const t = e.target.closest('[data-tab]')?.dataset.tab; if(t){ show(t); window.scrollTo({top:0}); } });
 $('.brand').addEventListener('click', e => { e.preventDefault(); show('jobs'); });
-addEventListener('hashchange', () => { const t = location.hash.slice(1); if(TABS.includes(t) && $('#tab-' + t).hidden) show(t); });
+addEventListener('hashchange', () => { const t = location.hash.slice(1); if(t === 'fit') return showFitNew(); if(TABS.includes(t) && $('#tab-' + t).hidden) show(t); });
 
 // ---------------------------------------------------------------- tarama
 let wasRunning = false, sawRun = false, finishShown = false, pollTimer, lastLog = '';
@@ -637,19 +734,24 @@ async function poll(){
     sawRun = true; finishShown = false; strip.hidden = false; strip.classList.add('run');
     const pct = s.total ? Math.round(100 * s.done / s.total) : 0;
     $('#pspin').hidden = false; $('#pdone').hidden = true; $('#pclose').hidden = true; $('#pbarwrap').hidden = false;
-    $('#pbar').style.width = pct + '%'; $('#ppct').textContent = pct + '%'; $('#pphase').textContent = s.phase || 'Taranıyor';
-    $('#ptext').textContent = `${s.done}/${s.total} · ${s.new} yeni ilan · ${s.current || ''}`; document.title = `%${pct} · İlan Radarı`;
+    $('#pbar').style.width = pct + '%'; $('#ppct').textContent = pct + '%'; $('#pphase').textContent = (s.auto ? 'Otomatik tarama · ' : '') + (s.phase || 'Taranıyor');
+    $('#ptext').textContent = `${s.done}/${s.total} · ${s.fresh ?? s.new} yeni ilan · ${s.current || ''}`; scanPct = pct; updateTitle();
   } else {
-    strip.classList.remove('run'); document.title = 'İlan Radarı';
+    strip.classList.remove('run'); scanPct = null; updateTitle();
     if(sawRun && s.finished && !finishShown){
       strip.hidden = false; $('#pspin').hidden = true; $('#pdone').hidden = false; $('#pbarwrap').hidden = true; $('#ppct').textContent = ''; $('#pclose').hidden = false;
-      $('#pphase').textContent = 'Tarama bitti'; $('#ptext').textContent = `${s.new} yeni, ${s.closed} kapanan ilan, ${s.failed} hata`;
+      const fresh = s.fresh ?? s.new, base = s.new - fresh;   // base: ilk kez taranan kaynaklardan gelenler, "yeni" sayılmaz
+      $('#pphase').textContent = (s.auto ? 'Otomatik tarama' : 'Tarama') + ' bitti';
+      $('#ptext').textContent = `${fresh} yeni ilan` + (s.fit ? ` (${s.fit} tanesi sana uygun)` : '') + (base > 0 ? ` (+${fmt(base)} ilan ilk kez taranan kaynaklardan)` : '') + `, ${s.closed} kapanan, ${s.failed} hata`;
     } else if(!sawRun || finishShown) strip.hidden = true;
   }
   if(s.log?.length) renderLog(s.log);
   if(wasRunning && !run){
     await loadMeta(); loadJobs(); loadHealth(); if(!$('#tab-companies').hidden) loadCompanies();
-    toast(`Tarama bitti: ${s.new} yeni ilan` + (s.failed ? `, ${s.failed} hata` : ''), s.new ? {action:{label:'Yeni ilanları göster', fn:() => { resetFilters(); S.days = '0'; show('jobs'); changed(); }}, ms:9000} : {});
+    const fresh = s.fresh ?? s.new;
+    toast(`Tarama bitti: ${fresh} yeni ilan` + (s.fit ? `, ${s.fit} tanesi sana uygun` : '') + (s.failed ? `, ${s.failed} hata` : ''),
+      s.fit ? {action:{label:'Sana uygun olanları göster', fn:showFitNew}, ms:12000}
+      : fresh ? {action:{label:'Yeni ilanları göster', fn:() => { resetFilters(); S.days = '3'; show('jobs'); changed(); }}, ms:9000} : {});
   } else if(run && Date.now() - metaAt > 10000) loadMeta();
   wasRunning = run; pollTimer = setTimeout(poll, run ? 1500 : 8000);
 }
@@ -667,6 +769,7 @@ $('#logcopy').onclick = async () => { try{ await navigator.clipboard.writeText($
 
 // ---------------------------------------------------------------- genel olaylar & kısayollar
 document.addEventListener('click', e => {
+  if(!$('#autoPop').hidden && !e.target.closest('.auto-wrap')) toggleAuto(false);
   if(!$('#fpop').hidden && !e.target.closest('.pop-wrap')) togglePop(false);
   if(!$('#scanMenu').hidden && !e.target.closest('.split')) toggleScanMenu(false);
 });
@@ -676,6 +779,7 @@ document.addEventListener('keydown', e => {
   if(document.querySelector('dialog[open]')) return;
   const t = e.target, typing = /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable;
   if(e.key === 'Escape'){
+    if(!$('#autoPop').hidden) return toggleAuto(false);
     if(!$('#fpop').hidden) return togglePop(false);
     if(!$('#scanMenu').hidden) return toggleScanMenu(false);
     if(drawerOpen()) return closeDrawer();
@@ -698,11 +802,13 @@ document.addEventListener('keydown', e => {
   if(key === 'arrowleft' && drawerOpen()) return stepDrawer(-1);
   if(id == null || !byId.has(id)) return;
   if(key === 'enter' && !drawerOpen() && !t.closest?.('button,a')){ e.preventDefault(); return openDrawer(id); }
-  if(key === 'o') return void window.open(byId.get(id).url, '_blank', 'noopener');
+  if(key === 'o'){ markSeen(id); return void window.open(byId.get(id).url, '_blank', 'noopener'); }
+  if(key === 'u') return markSeen(id, !byId.get(id).seen);
   if(key === 's') return doAct(id, 'star'); if(key === 'a') return doAct(id, 'applied'); if(key === 'h') return doAct(id, 'hide');
 });
 
 // ---------------------------------------------------------------- başlangıç
+const wantFit = location.hash === '#fit';   // masaüstü bildirimine tıklanınca "sana uygun yeni ilanlar" açılır
 applyTheme(); buildViews(); renderKpis(); syncUI(); show(location.hash.slice(1));
-loadMeta().then(() => loadJobs()).catch(() => toast('Sunucuya ulaşılamadı', {err:true}));
+loadMeta().then(() => wantFit ? showFitNew() : loadJobs()).catch(() => toast('Sunucuya ulaşılamadı', {err:true}));
 setTimeout(loadHealth, 1200); poll();

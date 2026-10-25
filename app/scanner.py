@@ -17,28 +17,30 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import ats as atsmod
 from . import browser, careers, custom, db, enrich, generic, programs, seniority
-from .util import host_of, norm
+from .util import HttpError, host_of, log, norm
 
 # Is ilani siteleri: kendi sitelerinde baska sirketlerin ilanlarini yayinliyorlar ve otomatik toplamaya izin vermiyorlar.
 # Bu firmalar listede olsa bile kariyer sayfalari taranmaz (Arama kisayollari sekmesinden acilir).
 JOB_BOARDS = ('kariyer.net', 'eleman.net', 'secretcv.com', 'youthall.com', 'techcareer.net', 'coderspace.io', 'linkedin.com',
               'indeed.com', 'glassdoor.com', 'yenibiris.com', 'careerjet.com.tr', 'isbul.net', 'anbeankampus.co', 'toptalent.co',
-              'kariyerkapisi.cbiko.gov.tr')
+              'kariyerkapisi.cbiko.gov.tr', 'turbin.ai')
 
 
 def is_job_board(website):
     h = host_of(website or '')
     return any(h == b or h.endswith('.' + b) for b in JOB_BOARDS)
 
-STATE = dict(running=False, mode=None, phase='', total=0, done=0, current='', started=None, finished=None,
-             new=0, closed=0, ok=0, failed=0, log=collections.deque(maxlen=500))
+STATE = dict(running=False, mode=None, auto=False, phase='', total=0, done=0, current='', started=None, finished=None,
+             new=0, fresh=0, fit=0, closed=0, ok=0, failed=0, log=collections.deque(maxlen=500))
+_NEW_IDS = []  # bu taramada eklenen ilanlarin kimlikleri (tarama sonunda "yeni" / "bana uygun" sayimi icin)
 _run_lock = threading.Lock()
 REDISCOVER_DAYS = 14  # kariyer sayfasi bulunamayan firmalar bu kadar gunde bir yeniden kesfedilir
+BURST_MIN, BURST_RATIO = 50, 2  # tek taramada bundan fazla VE onceki aktif sayinin 2 katindan fazla yeni ilan = gercek yeni degil, ilk tam okuma
 
 # ------------------------------------------------------------------ siniflandirma (eleme yok, yalnizca etiket)
 JUNIOR = re.compile(r'\bjunior\b|\bjr\b|entry.?level|new.?grad|graduate|yeni mezun|trainee|early career|campus|\bmt\b|'
                     r'management trainee|associate (software|engineer|developer)|uzman yardimcisi|genc yetenek|young talent')
-STAJ = re.compile(r'\bintern\b|internship|stajyer|\bstaj\b|working student|apprentice|summer internship')
+STAJ = re.compile(r'\bintern\b|internship|stajyer|\bstaj(?:i|in|ini|lar|lari)?\b|working student|apprentice|summer internship')  # norm() "ı"yi "i" yapar: Stajı = staji
 SENIOR = re.compile(r'\bsenior\b|\bsr\b|\blead\b|principal|\bstaff\b|manager|\bhead\b|director|architect|\bvp\b|chief|expert|'
                     r'kidemli|mudur|yonetici|direktor|\bsef\b|lider')
 TECH = re.compile(r'software|yazilim|developer|gelistirici|backend|back-end|frontend|front-end|full.?stack|\bdata\b|\bveri\b|'
@@ -72,7 +74,9 @@ def classify(title, team=''):
 
 # ------------------------------------------------------------------ yardimcilar
 def _log(msg):
+    """Arayuzdeki 'Gunluk' sekmesi (bellekte, son 500 satir) ve kalici gunluk dosyasi (data/logs/tarama.log)."""
     STATE['log'].append(f"{dt.datetime.now():%H:%M:%S} {msg}")
+    log.info(msg)
 
 
 def _today():
@@ -85,6 +89,17 @@ def upsert(con, company_id, source, jobs, definitive=True, guard=True):
     now, new = _today(), 0
     prev = db.tl().execute('SELECT id, ext_id FROM jobs WHERE company_id=? AND source=? AND active=1', (company_id, source)).fetchall()
     prev_ids = {r['ext_id'] for r in prev}
+    # Kaynagin ilk taramasi: bu ilanlar siteye bugun eklenmedi, ilk kez goruluyor; arayuzde "yeni" sayilmaz (is_baseline=1).
+    baseline = int(not db.tl().execute('SELECT 1 FROM jobs WHERE company_id=? AND source=? LIMIT 1', (company_id, source)).fetchone()
+                   and not db.tl().execute('SELECT 1 FROM source_runs WHERE company_id=? AND source=? AND ok=1 LIMIT 1',
+                                           (company_id, source)).fetchone())
+    if not baseline:  # kaynak onceden kismen okunmussa (hata, sayfalama) ilk tam okuma yuzlerce "yeni" ilan getirir: o da ilk taramadir
+        known = {r['ext_id'] for r in db.tl().execute('SELECT ext_id FROM jobs WHERE company_id=? AND source=?', (company_id, source))}
+        n_new = len({str(j.get('id') or j.get('url'))[:500] for j in jobs if j.get('title')} - known)
+        if n_new > max(BURST_MIN, BURST_RATIO * len(prev_ids)):
+            baseline = 1
+            name = (db.tl().execute('SELECT name FROM companies WHERE id=?', (company_id,)).fetchone() or ['?'])[0]
+            _log(f"{name}: {source} kaynagindan {n_new} yeni ilan birden geldi (onceki aktif {len(prev_ids)}): ilk tam okuma sayildi, 'yeni' isaretlenmeyecek")
     ids, new_rows = set(), []
     for j in jobs:
         ext = str(j.get('id') or j.get('url'))[:500]
@@ -109,10 +124,13 @@ def upsert(con, company_id, source, jobs, definitive=True, guard=True):
                       desc[:6000] or None, exp, dkind, durl, row['id']))
         else:
             cur = db.write(db.tl(), 'INSERT INTO jobs(company_id,source,ext_id,title,location,team,url,posted,first_seen,last_seen,active,'
-                                    'level,is_tech,region,description,exp_min,detail_kind,detail_url) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?)',
+                                    'level,is_tech,region,description,exp_min,detail_kind,detail_url,is_baseline) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)',
                            (company_id, source, ext, j['title'], j.get('location', ''), j.get('team', ''), j.get('url', ''),
-                            j.get('posted'), now, now, level, tech, region, desc[:6000] or None, exp, dkind, durl))
+                            j.get('posted'), now, now, level, tech, region, desc[:6000] or None, exp, dkind, durl, baseline))
             new += 1
+            _NEW_IDS.append(cur.lastrowid)
+            if not baseline:
+                STATE['fresh'] = STATE.get('fresh', 0) + 1  # tarama surerken kaba sayac; kesin sayi _summarize_new'de
             new_rows.append((cur.lastrowid, j, region, bool(desc)))
     closed = 0
     if definitive and (ids or len(prev) <= 3 or not guard):  # onceden cok ilan vardi ve simdi 0 geldiyse kaynak bozulmus olabilir
@@ -127,19 +145,22 @@ def upsert(con, company_id, source, jobs, definitive=True, guard=True):
 def enrich_pending(company_id):
     """Aciklamasi olmayan aktif ilanlar icin detay sayfasini cek: Turkiye/uzaktan/belirtilmemis konumlular,
     firma basina tarama basina en fazla enrich.MAX_PER_COMPANY ilan (siteleri yormamak ve engellenmemek icin).
-    Kalanlar sonraki taramalarda tamamlanir."""
+    Kalanlar sonraki taramalarda tamamlanir. Liste konum vermediyse ve detay sayfasi veriyorsa (JobPosting) konum/bolge da dolar."""
     rows = db.tl().execute(
-        "SELECT id, title, team, detail_kind, detail_url FROM jobs WHERE company_id=? AND active=1 AND description IS NULL "
+        "SELECT id, title, team, location, region, detail_kind, detail_url FROM jobs WHERE company_id=? AND active=1 AND description IS NULL "
         "AND detail_checked IS NULL AND detail_url IS NOT NULL AND region IN ('Türkiye','Uzaktan','Belirtilmemiş') "
         "ORDER BY is_tech DESC, first_seen DESC LIMIT ?", (company_id, enrich.MAX_PER_COMPANY)).fetchall()
     done = 0
     for r in rows:
-        desc, posted = enrich.fetch_detail(r['detail_kind'], r['detail_url'])
+        desc, posted, loc = enrich.fetch_detail(r['detail_kind'], r['detail_url'])
         if desc:
             title_level, _ = classify(r['title'], r['team'] or '')
             level, exp = seniority.level_from(title_level, desc)
             db.write(db.tl(), 'UPDATE jobs SET description=?, exp_min=?, level=?, posted=COALESCE(posted, ?), detail_checked=1 WHERE id=?',
                      (desc[:6000], exp, level, posted, r['id']))
+            if loc and not (r['location'] or '').strip():  # listede konum yoktu, detay sayfasi verdi (uzaktan isaretli ilan uzaktan kalir)
+                region = r['region'] if r['region'] == 'Uzaktan' and region_of(loc) != 'Türkiye' else region_of(loc)
+                db.write(db.tl(), 'UPDATE jobs SET location=?, region=? WHERE id=?', (loc, region, r['id']))
             done += 1
         else:
             db.write(db.tl(), 'UPDATE jobs SET detail_checked=1 WHERE id=?', (r['id'],))
@@ -152,19 +173,62 @@ def _record_run(c, source, ok, count=0, new=0, closed=0, prev=0, overlap=None, e
              (dt.datetime.now().isoformat(timespec='seconds'), c['id'], source, int(ok), count, new, closed, prev, overlap, error))
 
 
-def health_flags(prev, count, overlap):
+GENERIC_MIN_PREV = 5  # genel ayristirici listeleri kucuk: saglik kontrolu 5 ilandan baslar (ATS ve ozel okuyucularda 10)
+
+
+def _min_prev(source):
+    return GENERIC_MIN_PREV if source == 'genel' else 10
+
+
+def _churn(prev, overlap, source=''):
+    """Onceki ilanlarin cogu bir anda kayboldu, yerine baskalari geldi: ilan kimlikleri kararsiz (adres degisiyor) ya da sayfa
+    her seferinde baska ilanlar gosteriyor (or. 'one cikan ilanlar' listesi)."""
+    return prev >= _min_prev(source) and overlap is not None and overlap < 0.4
+
+
+def health_flags(prev, count, overlap, source=''):
     """Kaynak sagligi uyarilari: okuyucu bozulmus ya da ilan kimlikleri kararsiz olabilir."""
     flags = []
-    if prev >= 10 and overlap is not None and overlap < 0.4:
+    if _churn(prev, overlap, source):
         flags.append(f'ilanlarin %{round(100 * (1 - overlap))}i bir anda degisti (okuyucu/kimlik sorunu olabilir)')
-    if prev >= 10 and count < prev * 0.4:
+    if prev >= _min_prev(source) and count < prev * 0.4:
         flags.append(f'ilan sayisi {prev} -> {count} dustu')
+    return flags
+
+
+def _check_health(c, source, prev, count, overlap, new_rows):
+    """Saglik uyarilarini loga yazar ve dondurur. Kimlik kaymasinda bu taramada eklenen ilanlar 'yeni' sayilmaz (is_baseline=1):
+    gercekten yeni degiller, ayni ya da rastgele ilanlar yeni kimlikle geldi; 'bana uygun' bildirimi de gitmez."""
+    flags = health_flags(prev, count, overlap, source)
+    if flags:
+        _log(f'{c["name"]}: kaynak sagligi uyarisi: {"; ".join(flags)}')
+    if new_rows and _churn(prev, overlap, source):
+        ids = [r[0] for r in new_rows]
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            db.write(db.tl(), f'UPDATE jobs SET is_baseline=1 WHERE id IN ({",".join("?" * len(chunk))})', chunk)
+        _log(f'{c["name"]}: kimlik kaymasi: {source} kaynagindan gelen {len(ids)} ilan yeni sayilmadi')
     return flags
 
 
 def _finish_company(con, c, status, note, n_jobs):
     db.write(db.tl(), 'UPDATE companies SET status=?, status_note=?, last_scan=?, job_count=? WHERE id=?',
              (status, note[:300], dt.datetime.now().isoformat(timespec='minutes'), n_jobs, c['id']))
+
+
+def _robots_block(con, c, source):
+    """robots.txt bu kaynagi okumamiza izin vermiyor: kaynagin acik ilanlari kapanir, firma 'robots' durumuna alinir.
+    Hata sayilmaz; her taramada kural yeniden kontrol edilir, site izin verirse okuma kendiliginden baslar."""
+    rows = db.tl().execute('SELECT id FROM jobs WHERE company_id=? AND source=? AND active=1', (c['id'], source)).fetchall()
+    for r in rows:
+        db.write(db.tl(), 'UPDATE jobs SET active=0 WHERE id=?', (r['id'],))
+    _record_run(c, source, True, 0, 0, len(rows), len(rows), None, 'robots.txt izin vermiyor')
+    active = db.tl().execute('SELECT COUNT(*) FROM jobs WHERE company_id=? AND active=1', (c['id'],)).fetchone()[0]
+    _finish_company(con, c, 'robots', f'robots.txt izin vermiyor: {source} kaynagi taranmiyor', active)
+    STATE['closed'] += len(rows)
+    STATE['ok'] += 1
+    if rows:
+        _log(f'{c["name"]}: robots.txt izin vermiyor, {source} kaynagindaki {len(rows)} ilan kapatildi')
 
 
 def _fetch_known(c):
@@ -178,17 +242,17 @@ def scan_known(con, c):
     source = 'ozel' if c['ats'] == 'custom' else c['ats']
     try:
         source, jobs = _fetch_known(c)
-        new, closed, prev, overlap, new_rows = upsert(con, c['id'], source, jobs)
+        # okuyucu bos listeyi dogruladiysa (or. Workday'de Turkiye ilani yok) koruma devre disi: eski ilanlar kapanir
+        new, closed, prev, overlap, new_rows = upsert(con, c['id'], source, jobs, guard=not getattr(jobs, 'confirmed', False))
         enrich_pending(c['id'])
         active = db.tl().execute('SELECT COUNT(*) FROM jobs WHERE company_id=? AND active=1', (c['id'],)).fetchone()[0]
-        note = f'{source}: {len(jobs)} ilan'
+        note = f'{source}: {len(jobs)} ilan' + (f' ({jobs.note})' if getattr(jobs, 'note', '') else '')
         if jobs and c['ats'] != 'custom' and not any(region_of(j.get('location', ''), j.get('remote')) in ('Türkiye', 'Uzaktan', 'Belirtilmemiş')
                                                      for j in jobs):
             note += ' — dikkat: hicbiri Turkiye/uzaktan degil, yanlis eslesme olabilir'
-        flags = health_flags(prev, len(jobs), overlap)
+        flags = _check_health(c, source, prev, len(jobs), overlap, new_rows)
         if flags:
             note += ' — SAGLIK: ' + '; '.join(flags)
-            _log(f'{c["name"]}: kaynak sagligi uyarisi: {"; ".join(flags)}')
         _record_run(c, source, True, len(jobs), new, closed, prev, overlap)
         _finish_company(con, c, 'ozel' if c['ats'] == 'custom' else 'ats', note, active)
         STATE['new'] += new
@@ -197,6 +261,9 @@ def scan_known(con, c):
         if new:
             _log(f'{c["name"]}: {new} yeni ilan ({source})')
     except Exception as e:  # noqa: BLE001
+        if getattr(e, 'status', None) == 'robots':
+            return _robots_block(con, c, source)
+        log.warning('%s: %s okunamadi', c['name'], source, exc_info=True)  # tam iz dosyaya; tarama diger firmalarla surer
         STATE['failed'] += 1
         _record_run(c, source, False, error=str(e)[:200])
         if c['ats'] != 'custom' and getattr(e, 'status', None) in (403, 404, 410):
@@ -219,7 +286,7 @@ def scan_discover(con, c, force=False):
         return
     try:
         need = force or not c['checked_at'] or c['status'] in (None, 'erisilemedi', 'hata')
-        if not need and c['status'] in ('kariyer-yok', 'site-yok', 'yonlendirme'):
+        if not need and c['status'] in ('kariyer-yok', 'site-yok', 'yonlendirme', 'robots'):
             age = (dt.date.today() - dt.date.fromisoformat(c['checked_at'][:10])).days
             need = age >= REDISCOVER_DAYS
         jobs, status, note = None, c['status'], c['status_note'] or ''
@@ -229,6 +296,8 @@ def scan_discover(con, c, force=False):
                      (r['career_url'], r['ats'], r['ats_slug'], r['ats_extra'], r['status'], r['status_note'][:300],
                       dt.datetime.now().isoformat(timespec='minutes'), c['id']))
             c = dict(c, career_url=r['career_url'], ats=r['ats'], ats_slug=r['ats_slug'], ats_extra=r['ats_extra'])
+            if r['status'] == 'robots':
+                return _robots_block(con, c, 'genel')
             jobs, status, note = r['jobs'], r['status'], r['status_note']
             if atsmod.has_reader(r['ats'], r['ats_extra']):
                 try:
@@ -241,18 +310,21 @@ def scan_discover(con, c, force=False):
                     db.write(db.tl(), "UPDATE companies SET ats='generic', ats_extra=? WHERE id=?", (r['ats'], c['id']))
                     c = dict(c, ats='generic', ats_extra=r['ats'])
                     final, html, links, frames = browser.render(c['career_url'] or c['website'])
-                    jobs = generic.extract(final, [tuple(x) for x in links])
+                    jobs = generic.extract(final, [tuple(x) for x in links], html)
                     status = 'genel' if jobs else 'sayfa-var-ilan-yok'
                     note = (f'genel ayristirici: {len(jobs)} ilan' if jobs else 'kariyer sayfasi var, ilan listesi bulunamadi') + \
                         f' (sayfadaki {old} hesabi calismiyor: {getattr(e, "status", e)})'
         elif c['ats'] == 'generic' and c['career_url']:
             final, html, links, frames = browser.render(c['career_url'])
-            jobs = generic.extract(final, [tuple(x) for x in links])
+            jobs = generic.extract(final, [tuple(x) for x in links], html)
             status = 'genel' if jobs else 'sayfa-var-ilan-yok'
             note = f'genel ayristirici: {len(jobs)} ilan' if jobs else 'kariyer sayfasi var, ilan listesi bulunamadi'
         if jobs is not None and (jobs or c['ats'] == 'generic'):
             new, closed, prev, overlap, new_rows = upsert(con, c['id'], 'genel', jobs, definitive=True, guard=False)
             enrich_pending(c['id'])
+            flags = _check_health(c, 'genel', prev, len(jobs), overlap, new_rows)
+            if flags:
+                note = (note or '') + ' — SAGLIK: ' + '; '.join(flags)
             _record_run(c, 'genel', True, len(jobs), new, closed, prev, overlap)
             STATE['new'] += new
             STATE['closed'] += closed
@@ -264,6 +336,9 @@ def scan_discover(con, c, force=False):
         _finish_company(con, c, status or 'kariyer-yok', note or '', active)
         STATE['ok'] += 1
     except Exception as e:  # noqa: BLE001
+        if getattr(e, 'status', None) == 'robots':  # kayitli kariyer sayfasi tarayicida acilirken robots.txt engeli
+            return _robots_block(con, c, 'genel')
+        log.warning('%s: kesif/tarama hatasi', c['name'], exc_info=True)
         STATE['failed'] += 1
         _record_run(c, 'genel', False, error=str(e)[:200])
         _finish_company(con, c, 'hata', f'kesif/tarama hatasi: {str(e)[:150]}', c['job_count'] or 0)
@@ -275,11 +350,12 @@ STALL_SECONDS = 600  # kuyruk bittikten sonra bu kadar ilerleme olmazsa takilan 
 
 
 def program_jobs(progs):
-    """Program sayfalarini ilan satirina cevir. Durum ve son basvuru tarihi 'team' alaninda gorunur."""
+    """Program sayfalarini ilan satirina cevir. Durum ve son basvuru tarihi 'team' alaninda gorunur.
+    Konum sayfadan cikarilir (programs._location); cok uluslu sirketlerin genel sayfalari 'Turkiye' sayilmaz."""
     out = []
     for p in progs:
         team = 'Program · ' + p['status'] + (f" · son başvuru {p['deadline']}" if p.get('deadline') else '')
-        out.append(dict(id=p['url'], url=p['url'], title=p['title'], team=team, location='Türkiye', desc=p['text'],
+        out.append(dict(id=p['url'], url=p['url'], title=p['title'], team=team, location=p.get('location', ''), desc=p['text'],
                         level='Staj' if p['kind'] == 'Staj' else 'Junior / Yeni mezun', tech=True))
     return out
 
@@ -293,11 +369,25 @@ def scan_programs(con, c, rediscover=False):
             urls = [p['url'] for p in progs]
             definitive = True
         else:
-            progs = [p for p in (programs.read(u, c) for u in known) if p]
-            for p in progs:
-                p.pop('links', None)
-            urls = known
-            definitive = len(progs) == len(known)  # okunamayan sayfa (gecici hata) varsa ilanini kapatma
+            progs, blocked, failed = [], [], 0
+            for u in known:
+                try:
+                    p = programs.read(u, c)
+                except HttpError as e:  # robots.txt izin vermiyor: sayfa listeden cikar, ilani asagida kapanir
+                    if e.status != 'robots':
+                        raise
+                    blocked.append(u)
+                    continue
+                if p:
+                    p.pop('links', None)
+                    progs.append(p)
+                else:
+                    failed += 1
+            urls = [u for u in known if u not in blocked]
+            definitive = not failed  # okunamayan sayfa (gecici hata) varsa ilanini kapatma
+            for u in blocked:
+                db.write(db.tl(), "UPDATE jobs SET active=0 WHERE company_id=? AND source='program' AND ext_id=? AND active=1", (c['id'], u))
+                _log(f'{c["name"]}: robots.txt izin vermiyor, program sayfasi kapatildi: {u}')
         db.write(db.tl(), 'UPDATE companies SET program_urls=?, program_checked=? WHERE id=?',
                  (json.dumps(urls, ensure_ascii=False) if urls else None, dt.datetime.now().isoformat(timespec='minutes'), c['id']))
         new, closed, prev, overlap, _ = upsert(con, c['id'], 'program', program_jobs(progs), definitive=definitive, guard=False)
@@ -309,6 +399,7 @@ def scan_programs(con, c, rediscover=False):
         if new:
             _log(f'{c["name"]}: {new} yeni program sayfasi ({", ".join(p["title"][:40] for p in progs[:3])})')
     except Exception as e:  # noqa: BLE001
+        log.warning('%s: program sayfasi hatasi', c['name'], exc_info=True)
         STATE['failed'] += 1
         _record_run(c, 'program', False, error=str(e)[:200])
         _log(f'{c["name"]}: program HATA {str(e)[:100]}')
@@ -346,14 +437,40 @@ def _browser_pool(con, rows, workers, force=False, fn=None):
             break
 
 
-def run(mode='hizli', company_id=None):
+def _summarize_new():
+    """Bu taramada eklenen ilanlardan 'yeni' sayilanlar (db.RECENT) ve bunlardan 'bana uygun' olanlar (db.FIT).
+    Dondurur: (yeni_sayisi, [bana uygun satirlari: id, title, company]). Seviye/bolge aciklama cekildikten sonra kesinlesir."""
+    ids, cut = list(_NEW_IDS), db.cutoff(db.NEW_DAYS)
+    fresh, fit = 0, []
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        rows = db.tl().execute(
+            f'SELECT j.id, j.title, c.name AS company, {db.FIT} AS fit FROM jobs j JOIN companies c ON c.id=j.company_id '
+            f'WHERE j.id IN ({",".join("?" * len(chunk))}) AND j.active=1 AND j.hidden=0 AND {db.RECENT}', [*chunk, cut, cut]).fetchall()
+        fresh += len(rows)
+        fit += [dict(r) for r in rows if r['fit']]
+    return fresh, fit
+
+
+def _notify_fit(fit):
+    """Otomatik tarama 'bana uygun' yeni ilan buldu: masaustu bildirimi (arka planda; ayar kapaliysa gonderilmez)."""
+    from . import auto, notify
+    if not fit or not auto.settings()['notify']:
+        return
+    lines = [f"{r['company']} — {r['title']}"[:90] for r in fit[:3]] + ([f'+{len(fit) - 3} ilan daha'] if len(fit) > 3 else [])
+    threading.Thread(target=notify.toast, args=(f'{len(fit)} yeni ilan sana uygun', lines, notify.BASE_URL + '#fit'), daemon=True).start()
+
+
+def run(mode='hizli', company_id=None, auto=False):
     if not _run_lock.acquire(blocking=False):
         return False
     con = db.connect()
     started = dt.datetime.now().isoformat(timespec='seconds')
-    STATE.update(running=True, mode=mode, phase='hazirlaniyor', total=0, done=0, current='', started=started, finished=None,
-                 new=0, closed=0, ok=0, failed=0)
+    STATE.update(running=True, mode=mode, auto=auto, phase='hazirlaniyor', total=0, done=0, current='', started=started, finished=None,
+                 new=0, fresh=0, fit=0, closed=0, ok=0, failed=0)
     STATE['log'].clear()
+    _NEW_IDS.clear()
+    _log(f'tarama basladi: {mode}' + (' (otomatik)' if auto else ''))
     try:
         db.import_excel(con)
         added = db.sync_excel(con)
@@ -420,7 +537,16 @@ def run(mode='hizli', company_id=None):
         _log(f'bitti: {STATE["new"]} yeni, {STATE["closed"]} kapanan ilan, {STATE["failed"]} hata')
     except Exception:  # noqa: BLE001
         _log('BEKLENMEYEN HATA: ' + traceback.format_exc()[-300:])
+        log.error('beklenmeyen tarama hatasi', exc_info=True)
     finally:
+        try:
+            fresh, fit = _summarize_new()
+            STATE.update(fresh=fresh, fit=len(fit))
+            if auto:
+                _notify_fit(fit)
+        except Exception:  # noqa: BLE001 - ozet/bildirim hatasi taramayi bozmasin
+            _log('OZET HATASI: ' + traceback.format_exc()[-200:])
+            log.error('ozet/bildirim hatasi', exc_info=True)
         fin = dt.datetime.now().isoformat(timespec='seconds')
         db.write(db.tl(), 'INSERT INTO scans(started,finished,mode,companies,ok,failed,new_jobs,closed_jobs) VALUES(?,?,?,?,?,?,?,?)',
                  (started, fin, mode, STATE['total'], STATE['ok'], STATE['failed'], STATE['new'], STATE['closed']))
@@ -429,8 +555,8 @@ def run(mode='hizli', company_id=None):
     return True
 
 
-def start(mode='hizli', company_id=None):
+def start(mode='hizli', company_id=None, auto=False):
     if STATE['running']:
         return False
-    threading.Thread(target=run, args=(mode, company_id), daemon=True).start()
+    threading.Thread(target=run, args=(mode, company_id, auto), daemon=True).start()
     return True

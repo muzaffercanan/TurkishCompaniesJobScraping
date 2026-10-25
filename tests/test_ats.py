@@ -1,0 +1,120 @@
+"""ATS okuyuculari: Workday ulke filtresi ve konum. Internet yok, sahte Workday yanitlari."""
+import json
+import unittest
+from unittest import mock
+
+from app import ats
+
+
+def posting(path, loc=None):
+    d = {'title': 'Software Engineer', 'externalPath': path}
+    if loc is not None:
+        d['locationsText'] = loc
+    return d
+
+
+def country_facet(*values, nested=True, param='locationCountry'):
+    f = {'facetParameter': param, 'descriptor': 'Ülke', 'values': [{'descriptor': n, 'id': i, 'count': c} for n, i, c in values]}
+    return [{'facetParameter': 'jobFamilyGroup', 'values': [{'descriptor': 'R&D', 'id': 'rd', 'count': 3}]},
+            {'facetParameter': 'locationMainGroup', 'values': [f]} if nested else f]
+
+
+class FakeWorkday:
+    """Workday CXS ucu: appliedFacets bossa tum ilanlar, doluysa Turkiye ilanlari; toplam yalnizca ilk sayfada."""
+
+    def __init__(self, all_jobs, tr_jobs=(), facets=(), total=None):
+        self.all_jobs, self.tr_jobs, self.facets, self.total, self.calls = list(all_jobs), list(tr_jobs), list(facets), total, []
+
+    def __call__(self, url, data=None, method=None, headers=None, **kw):
+        body = json.loads(data)
+        self.calls.append(body)
+        jobs, off = (self.tr_jobs if body['appliedFacets'] else self.all_jobs), body['offset']
+        d = {'total': 0, 'jobPostings': jobs[off:off + 20]}
+        if off == 0:
+            d['total'] = len(jobs) if body['appliedFacets'] or self.total is None else self.total
+            if not body['appliedFacets']:
+                d['facets'] = self.facets
+        return 200, url, json.dumps(d)
+
+
+class WorkdayRules(unittest.TestCase):
+    def test_nested_country_facet(self):
+        facets = country_facet(('Fransa', 'fr', 30), ('Türkiye', 'tr', 2))
+        self.assertEqual(ats._wd_country(facets), ('locationCountry', ['tr'], 32))
+
+    def test_top_level_country_facet_in_english(self):
+        facets = country_facet(('Turkey', 't', 1), ('United States', 'us', 5), nested=False, param='Location_Country')
+        self.assertEqual(ats._wd_country(facets), ('Location_Country', ['t'], 6))
+
+    def test_country_facet_without_turkey(self):
+        self.assertEqual(ats._wd_country(country_facet(('Fransa', 'fr', 30))), ('locationCountry', [], 30))
+
+    def test_no_country_facet(self):
+        self.assertIsNone(ats._wd_country([{'facetParameter': 'jobFamilyGroup', 'values': [{'descriptor': 'R&D', 'id': 'x'}]}]))
+        self.assertIsNone(ats._wd_country(None))
+
+    def test_location(self):
+        self.assertEqual(ats._wd_location(posting('/job/Austin/X_1', 'Austin, TX, USA')), 'Austin, TX, USA')
+        self.assertEqual(ats._wd_location(posting('/job/Bogota-Carrera-7/X_1')), 'Bogota Carrera 7')       # locationsText yok
+        self.assertEqual(ats._wd_location(posting('/job/Guyancourt/X_1', '2 Locations')), 'Guyancourt')    # birden fazla konum
+        self.assertEqual(ats._wd_location(posting('/job/Istanbul/X_1'), turkey=True), 'Istanbul, Türkiye')
+        self.assertEqual(ats._wd_location(posting('/job/X/Y', 'Istanbul, Turkey'), turkey=True), 'Istanbul, Turkey')
+        self.assertEqual(ats._wd_location(posting(''), turkey=True), 'Türkiye')
+
+
+class WorkdayReader(unittest.TestCase):
+    def run_reader(self, fake):
+        with mock.patch.object(ats, 'fetch', fake), mock.patch.object(ats.time, 'sleep'):
+            return ats.workday('acme', 'wd3|Careers')
+
+    def test_turkey_filter_is_applied(self):
+        fake = FakeWorkday([posting(f'/job/Paris/J{i}') for i in range(32)], [posting('/job/Istanbul/T1'), posting('/job/Ankara/T2')],
+                           country_facet(('Fransa', 'fr', 30), ('Türkiye', 'tr', 2)))
+        jobs = self.run_reader(fake)
+        self.assertEqual([j['id'] for j in jobs], ['/job/Istanbul/T1', '/job/Ankara/T2'])
+        self.assertEqual([j['location'] for j in jobs], ['Istanbul, Türkiye', 'Ankara, Türkiye'])
+        self.assertEqual([c['appliedFacets'] for c in fake.calls], [{}, {'locationCountry': ['tr']}])
+        self.assertIsInstance(jobs, ats.Jobs)
+        self.assertFalse(jobs.confirmed)
+        self.assertIn('Turkiye filtresi: 2 / 32', jobs.note)
+
+    def test_filtered_paging(self):
+        fake = FakeWorkday([posting('/job/Paris/J')], [posting(f'/job/Istanbul/T{i}') for i in range(45)],
+                           country_facet(('Türkiye', 'tr', 45), ('Fransa', 'fr', 1)))
+        self.assertEqual(len(self.run_reader(fake)), 45)
+        self.assertEqual([c['offset'] for c in fake.calls], [0, 0, 20, 40])
+
+    def test_no_turkey_in_complete_country_facet_is_confirmed_empty(self):
+        fake = FakeWorkday([posting(f'/job/Paris/J{i}') for i in range(30)], facets=country_facet(('Fransa', 'fr', 30)))
+        jobs = self.run_reader(fake)
+        self.assertEqual(list(jobs), [])
+        self.assertTrue(jobs.confirmed)
+        self.assertIn("Turkiye'de ilani yok", jobs.note)
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_nearly_complete_country_facet_without_turkey_is_confirmed_empty(self):  # Samsung: 649 / 658 ilanda ulke var
+        fake = FakeWorkday([posting(f'/job/Austin/J{i}') for i in range(100)], facets=country_facet(('United States', 'us', 96)))
+        self.assertTrue(self.run_reader(fake).confirmed)
+
+    def test_incomplete_country_facet_reads_everything(self):
+        # ulke filtresi ilanlarin yalnizca bir kismini kapsiyor: Turkiye'nin olmadigi kesin degil, tum liste alinir
+        fake = FakeWorkday([posting(f'/job/Paris/J{i}') for i in range(30)], facets=country_facet(('Fransa', 'fr', 10)))
+        jobs = self.run_reader(fake)
+        self.assertEqual(len(jobs), 30)
+        self.assertNotIsInstance(jobs, ats.Jobs)
+        self.assertEqual(jobs[0]['location'], 'Paris')
+
+    def test_no_country_facet_reads_everything(self):
+        jobs = self.run_reader(FakeWorkday([posting('/job/Paris/J1', 'Paris, France')]))
+        self.assertEqual([j['location'] for j in jobs], ['Paris, France'])
+
+    def test_empty_filtered_result_is_not_confirmed(self):
+        # filtre "Turkiye'de 2 ilan var" diyor ama liste bos: okuyucu/uc nokta bozulmus olabilir, eski ilanlar korunmali
+        fake = FakeWorkday([posting('/job/Paris/J1')], [], country_facet(('Türkiye', 'tr', 2), ('Fransa', 'fr', 1)))
+        jobs = self.run_reader(fake)
+        self.assertEqual(list(jobs), [])
+        self.assertFalse(jobs.confirmed)
+
+
+if __name__ == '__main__':
+    unittest.main()

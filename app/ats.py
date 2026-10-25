@@ -7,7 +7,17 @@ import re
 import time
 import urllib.parse
 
-from .util import HttpError, fetch, fetch_json, text
+from . import dom
+from .util import HttpError, fetch, fetch_json, norm, text
+
+
+class Jobs(list):
+    """Okuyucu sonucu ve ek bilgisi. note: firma durum notuna eklenir. confirmed: kaynak listeyi dogruladi; bos olsa bile
+    okuyucu bozulmasi degildir, onceki ilanlar kapatilabilir (or. Workday ulke filtresinde Turkiye hic yok)."""
+
+    def __init__(self, items=(), note='', confirmed=False):
+        super().__init__(items)
+        self.note, self.confirmed = note, confirmed
 
 
 def _d(s):
@@ -212,28 +222,75 @@ def teamtailor(slug, extra=None):
     return out
 
 
+_TURKEY = re.compile(r'^(turkiye|turkey|turkei|turqu|turchia)')  # norm() ile sadelestirilmis ulke adi (arayuz dili degisebilir)
+_WD_MANY = re.compile(r'^\d+\s+\S+$')  # "2 Locations" / "3 Konum": birden fazla konum, gercek yer adi degil
+
+
+def _wd_country(facets):
+    """Workday filtrelerinde ulke filtresi (ic ice olabilir: locationMainGroup > locationCountry).
+    Dondurur: (parametre, [Turkiye deger id'leri], degerlerin toplam ilan sayisi) ya da ulke filtresi yoksa None."""
+    for f in facets or []:
+        param, vals = f.get('facetParameter') or '', f.get('values') or []
+        if 'country' in param.lower():
+            ids = [v['id'] for v in vals if v.get('id') and _TURKEY.match(norm(v.get('descriptor')))]
+            return param, ids, sum(v.get('count') or 0 for v in vals)
+        sub = _wd_country([v for v in vals if 'facetParameter' in v])
+        if sub:
+            return sub
+    return None
+
+
+def _wd_location(j, turkey=False):
+    """Konum metni; bazi hesaplar locationsText vermiyor: o zaman adresteki konum parcasi (/job/<konum>/...).
+    Turkiye filtresiyle alinan ilanlara ulke eklenir (bolge 'Turkiye' olsun)."""
+    loc = (j.get('locationsText') or '').strip()
+    if not loc or _WD_MANY.match(loc):
+        m = re.match(r'/job/([^/]+)/', j.get('externalPath') or '')
+        loc = urllib.parse.unquote(m.group(1)).replace('-', ' ').strip() if m else loc
+    if turkey and not re.search(r'turkiye|turkey', norm(loc)):
+        loc = f'{loc}, Türkiye' if loc else 'Türkiye'
+    return loc
+
+
+def _wd_page(api, off, facets):
+    body = json.dumps({'appliedFacets': facets, 'limit': 20, 'offset': off, 'searchText': ''}).encode()
+    _, _, t = fetch(api, data=body, method='POST', headers={'Content-Type': 'application/json', 'Accept': 'application/json'})
+    return json.loads(t)
+
+
 def workday(slug, extra=None):
+    """Workday CXS uc noktasi (sayfali). Hesapta ulke filtresi varsa yalnizca Turkiye ilanlari alinir: cok uluslu hesaplarda
+    (Accenture, Samsung) binlerce yurt disi ilani gelmesin ve 2000 sonuc sinirina takilinmasin."""
     wd, site = (extra or 'wd3|External').split('|')
     base = f'https://{slug}.{wd}.myworkdayjobs.com'
     api = f'{base}/wday/cxs/{slug}/{site}/jobs'
+    d = _wd_page(api, 0, {})
+    total_all, facets = d.get('total') or 0, {}
+    country = _wd_country(d.get('facets'))
+    if country:
+        param, ids, counted = country
+        if ids:
+            facets = {param: ids}
+            d = _wd_page(api, 0, facets)
+        elif counted >= 0.95 * total_all:  # ulke filtresi ilanlarin (neredeyse) tamamini kapsiyor ve Turkiye yok: kesin bos
+            # (Samsung: 658 ilanin 649'unda ulke var; ulkesiz birkac ilan Turkiye olsaydi filtrede 'Turkiye' degeri cikardi)
+            return Jobs(note=f"Turkiye'de ilani yok (toplam {total_all})", confirmed=True)
     out, off, total = [], 0, None
-    while off < 3000:
-        body = json.dumps({'appliedFacets': {}, 'limit': 20, 'offset': off, 'searchText': ''}).encode()
-        _, _, t = fetch(api, data=body, method='POST', headers={'Content-Type': 'application/json', 'Accept': 'application/json'})
-        d = json.loads(t)
+    while True:
         if total is None:  # Workday toplam ilan sayisini YALNIZCA ilk sayfada dogru verir (sonrakilerde 0)
             total = d.get('total') or 0
         posts = d.get('jobPostings', [])
         for j in posts:
             path = j.get('externalPath', '')
-            out.append(dict(id=path or j.get('title'), title=j.get('title', ''), location=j.get('locationsText', ''), team='',
+            out.append(dict(id=path or j.get('title'), title=j.get('title', ''), location=_wd_location(j, bool(facets)), team='',
                             url=f'{base}/{site}{path}', posted=None, remote=False,
                             detail=('workday', f'{base}/wday/cxs/{slug}/{site}{path}')))
         off += 20
-        if not posts or off >= total:
+        if not posts or off >= total or off >= 3000:
             break
         time.sleep(0.6)
-    return out
+        d = _wd_page(api, off, facets)
+    return Jobs(out, note=f'Turkiye filtresi: {len(out)} / {total_all} ilan') if facets else out
 
 
 def successfactors(slug, extra=None):
@@ -241,17 +298,23 @@ def successfactors(slug, extra=None):
     host = extra if extra and 'successfactors' not in extra else None
     if not host:
         raise HttpError('okuyucu-yok', slug, 'SuccessFactors klasik portal (genel ayristirici kullanilacak)')
-    out, start = [], 0
+    out, seen, start = [], set(), 0
     while start < 1000:
-        _, _, t = fetch(f'https://{host}/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow={start}')
-        rows = re.findall(r'<a[^>]+class="jobTitle-link"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', t, flags=re.S)
-        locs = re.findall(r'<span class="jobLocation">\s*(.*?)\s*</span>', t, flags=re.S)
-        for i, (href, title) in enumerate(rows):
-            out.append(dict(id=href, title=text(title), location=text(locs[i]) if i < len(locs) else '', team='',
-                            url=urllib.parse.urljoin(f'https://{host}', href), posted=None, remote=False))
-        if len(rows) < 10:
+        _, _, t = fetch(f'https://{host}/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow={start}', robots=True)
+        doc, found = dom.parse(t), 0
+        # her ilan bir satir (tr.data-row); satir yoksa sayfadaki tum a.jobTitle-link (masaustu + mobil kopyalari tekillesir)
+        for row in doc.find_all('tr', cls='data-row') or doc.find_all('a', cls='jobTitle-link'):
+            a = row if row.tag == 'a' else row.find('a', cls='jobTitle-link')
+            if a is None or not a.get('href') or a.get('href') in seen:
+                continue
+            seen.add(a.get('href'))
+            found += 1
+            loc = (row if row.tag != 'a' else a.closest('tr') or a.parent).find('span', cls='jobLocation')
+            out.append(dict(id=a.get('href'), title=a.text(), location=loc.text() if loc else '', team='',
+                            url=urllib.parse.urljoin(f'https://{host}', a.get('href')), posted=None, remote=False))
+        if found < 10:
             break
-        start += len(rows)
+        start += found
     return out
 
 
@@ -271,13 +334,16 @@ def manatal(slug, extra=None):
 
 def jazzhr(slug, extra=None):
     """JazzHR (<slug>.applytojob.com/apply): sunucuda uretilen liste sayfasi."""
-    _, _, t = fetch(f'https://{slug}.applytojob.com/apply')
+    _, _, t = fetch(f'https://{slug}.applytojob.com/apply', robots=True)
     out = []
-    for m in re.finditer(r'<a href="(https?://[^"]*applytojob\.com/apply/([A-Za-z0-9]{6,})/[^"]*)"[^>]*>(.*?)</a>\s*</h3>(.*?)</li>\s*</ul>',
-                         t, flags=re.S):
-        loc = text(re.sub(r'<i[^>]*></i>', '', m.group(4)))
-        out.append(dict(id=m.group(2), title=text(m.group(3)), location=loc, team='', url=m.group(1), posted=None, remote=False,
-                        detail=('page', m.group(1))))
+    for item in dom.parse(t).find_all('li', cls='list-group-item'):
+        a = next((x for x in item.find_all('a') if re.search(r'applytojob\.com/apply/[A-Za-z0-9]{6,}/', x.get('href', ''))), None)
+        if a is None:
+            continue
+        href = a.get('href')
+        info = item.find('ul', cls='list-group-item-text')  # konum (ve varsa bolum) satiri
+        out.append(dict(id=re.search(r'/apply/([A-Za-z0-9]{6,})/', href).group(1), title=a.text(), location=info.text() if info else '',
+                        team='', url=href, posted=None, remote=False, detail=('page', href)))
     return out
 
 

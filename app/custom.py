@@ -1,23 +1,15 @@
 """Firmaya ozel ilan okuyucular (ATS'i olmayan kariyer portallari).
 Her okuyucu [{id,title,location,team,url,posted,remote}] dondurur. Hicbiri login gerektirmez, yalnizca herkese acik sayfa/uc noktalari okunur.
 Yeni firma eklemek: bir fonksiyon yaz, REGISTRY'e ekle, ats_manual.json'a {"firma":..,"ats":"custom","slug":"<REGISTRY anahtari>"} ekle."""
-import datetime as dt, html, json, re, ssl, time, urllib.parse, urllib.request
+import datetime as dt, html, json, re, time, urllib.parse
 
-ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
-UA = {'User-Agent': 'Mozilla/5.0 (compatible; ilan-izleyici)', 'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8'}
+from . import dom
+from .util import fetch
 
 
 def _open(url, data=None, method=None, headers=None, tries=2):
-    last = None
-    for _ in range(tries):
-        try:
-            req = urllib.request.Request(url, data=data, method=method, headers={**UA, **(headers or {})})
-            with urllib.request.urlopen(req, timeout=30, context=ctx) as r:
-                return r.read().decode('utf-8', 'replace')
-        except Exception as e:  # noqa
-            last = e
-            time.sleep(1)
-    raise RuntimeError(f'{type(last).__name__}: {last}')
+    """Ortak HTTP katmani (sertifika dogrulama, sunucu basina sinir, 429 beklemesi). Firma sitesi oldugu icin robots.txt'ye uyulur."""
+    return fetch(url, data=data, method=method, headers=headers, timeout=30, tries=tries, max_bytes=20_000_000, robots=True)[2]
 
 
 def _txt(s):
@@ -64,22 +56,18 @@ def turkcell():
 
 # --------------------------------------------------------------------------- Garanti BBVA
 def garanti():
+    """Ilan kartlari (div.job-card): baslik h2, adres /ilan/<R..>/<no>/..., sirket .job-card__company, konum .job-card__location.
+    Not: kariyer.garantibbva.com.tr robots.txt'si arama motorlari disindaki botlari engelliyor; izin verene kadar okunmaz."""
     base = 'https://kariyer.garantibbva.com.tr'
-    t = _open(base + '/tum-kariyer-firsatlari')
     out = []
-    for c in t.split('job-card job-card--white job-card-jobs-content')[1:]:
-        m = re.search(r'href=(/ilan/(R\d+)/(\d+)/[^ >]+)', c)
-        if not m:
+    for card in dom.parse(_open(base + '/tum-kariyer-firsatlari')).find_all('div', cls='job-card'):
+        link = next((a for a in card.find_all('a') if re.match(r'/ilan/R\d+/\d+/', a.get('href', ''))), None)
+        if not link:
             continue
-        h2 = re.search(r'<h2[^>]*>(.*?)</h2>', c, flags=re.S)
-        company = re.search(r'class="?o-link o-link--primary"?>(.*?)</a>', c, flags=re.S)
-        after = c[company.end():] if company else ''
-        # sirket adindan sonra gelen ilk kisa metin konumdur: "Ankara", "Istanbul (Hibrit)" ...
-        parts = [p for p in (_txt(x) for x in re.split(r'<[^>]+>', after)) if p]
-        loc = parts[0] if parts and len(parts[0]) < 60 else ''
-        title = _txt(h2.group(1)) if h2 else m.group(3)
-        comp = _txt(company.group(1)) if company else ''
-        out.append(dict(id=m.group(2) + '/' + m.group(3), title=title, location=loc, team=comp, url=base + m.group(1), posted=_dmy(_txt(c)),
+        rid, no = link.get('href').split('/')[2:4]
+        h2, company, loc, date = card.find('h2'), card.find(cls='job-card__company'), card.find(cls='job-card__location'), card.find(cls='job-card__date')
+        out.append(dict(id=f'{rid}/{no}', title=h2.text() if h2 else no, location=loc.text()[:60] if loc else '',
+                        team=company.text() if company else '', url=base + link.get('href'), posted=_dmy(date.text() if date else card.text()),
                         remote=False))
     return out
 
@@ -143,11 +131,18 @@ def amazon():
 
 # --------------------------------------------------------------------------- Roketsan
 def roketsan():
+    """Ilan tablosu: her satirda a.PL (baslik, /<kod>.job), span.location ve yayin tarihi hucresi."""
     base = 'https://kariyer.roketsan.com.tr'
-    t = _open(base + '/jobs')
     out = []
-    for m in re.finditer(r'<a href="(/([a-z0-9]+)\.job)" class="PL">(.*?)</a><span class=location>(.*?)</span>.*?<td align="center">\s*([^<]*?)\s*</td>', t, flags=re.S):
-        out.append(dict(id=m.group(2), title=_txt(m.group(3)), location=_txt(m.group(4)) + ', Türkiye', team='', url=base + m.group(1), posted=_dmy(m.group(5)), remote=False))
+    for a in dom.parse(_open(base + '/jobs')).find_all('a', cls='PL'):
+        m = re.match(r'/([a-z0-9]+)\.job$', a.get('href', ''))
+        row = a.closest('tr')
+        if not m or row is None:
+            continue
+        loc, date = row.find('span', cls='location'), row.find('td', align='center')
+        city = loc.text() if loc else ''  # bazi satirlarda konum yok (eski regex bu satiri sonraki ilanla birlestiriyordu)
+        out.append(dict(id=m.group(1), title=a.text(), location=f'{city}, Türkiye' if city else 'Türkiye', team='', url=base + a.get('href'),
+                        posted=_dmy(date.text() if date else ''), remote=False))
     return out
 
 
@@ -175,7 +170,7 @@ def baykar():
 
 REGISTRY = {'turkcell': turkcell, 'garanti': garanti, 'havelsan': havelsan, 'turktelekom': turktelekom, 'amazon': amazon, 'roketsan': roketsan, 'baykar': baykar}
 
-if __name__ == '__main__':  # python scripts/adapters.py  -> her okuyucuyu dene
+if __name__ == '__main__':  # python -m app.custom [turkcell ...]  -> her okuyucuyu canli dene
     import sys
     for name, fn in REGISTRY.items():
         if len(sys.argv) > 1 and name not in sys.argv[1:]:

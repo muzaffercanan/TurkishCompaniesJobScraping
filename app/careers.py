@@ -48,7 +48,7 @@ def _page(url, force_browser=False):
     """Sayfayi once duz HTTP ile, gerekirse gercek tarayici ile al. (final, html, links, frames, via)"""
     if not force_browser:
         try:
-            st, final, html = fetch(url, timeout=10, tries=1)
+            st, final, html = fetch(url, timeout=10, tries=1, robots=True)
             links = generic.links_from_html(final, html)
             if not generic.looks_js_only(html) and len(links) > 5:
                 return final, html, links, [], 'http'
@@ -71,7 +71,10 @@ def discover(c):
     try:
         final, html, links, frames, via = _page(site)
     except Exception as e:  # noqa: BLE001
-        res.update(status='erisilemedi', status_note=f'ana sayfa acilamadi: {str(e)[:80]}')
+        if getattr(e, 'status', None) == 'robots':
+            res.update(status='robots', status_note='robots.txt izin vermiyor: site taranmiyor')
+        else:
+            res.update(status='erisilemedi', status_note=f'ana sayfa acilamadi: {str(e)[:80]}')
         return res
     base = host_of(final)
     det = atsmod.detect(_blob(final, html, links, frames))
@@ -92,7 +95,7 @@ def discover(c):
         root = f'{urllib.parse.urlparse(final).scheme}://{urllib.parse.urlparse(final).netloc}'
         for p in COMMON_PATHS:
             try:
-                st, f2, h2 = fetch(root + p, timeout=6, tries=1, max_bytes=300_000)
+                st, f2, h2 = fetch(root + p, timeout=6, tries=1, max_bytes=300_000, robots=True)
                 if st == 200 and CAREER_RX.search(text(h2[:50000])) and host_of(f2) == base and urllib.parse.urlparse(f2).path.strip('/'):
                     order = [f2]
                     break
@@ -113,7 +116,7 @@ def discover(c):
                 if not _resolves(f'{sub}.{base}'):
                     continue
                 try:
-                    st, f2, h2 = fetch(f'https://{sub}.{base}', timeout=8, tries=1, max_bytes=300_000)
+                    st, f2, h2 = fetch(f'https://{sub}.{base}', timeout=8, tries=1, max_bytes=300_000, robots=True)
                     if st == 200:
                         order = [f2]
                         break
@@ -123,18 +126,20 @@ def discover(c):
         mail = re.search(r'mailto:([A-Za-z0-9._%+-]*(?:ik|hr|kariyer|career|insan|cv|jobs|basvuru)[A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+)', html, re.I)
         res.update(status='kariyer-yok', status_note=('yalnizca e-posta: ' + mail.group(1)) if mail else 'kariyer sayfasi bulunamadi')
         return res
-    redirect_note = None
+    redirect_note, robots_blocked, opened = None, False, False
     for cu in order:
         try:
             f2, h2, l2, fr2, via2 = _page(cu)
+            opened = True
         except Exception as e:  # noqa: BLE001
+            robots_blocked = robots_blocked or getattr(e, 'status', None) == 'robots'
             res.update(career_url=cu, status='erisilemedi', status_note=f'kariyer sayfasi acilamadi: {str(e)[:60]}')
             continue
         det = atsmod.detect(_blob(f2, h2, l2, fr2))
         if det and atsmod.has_reader(det[0], det[2]):
             res.update(career_url=f2, ats=det[0], ats_slug=det[1], ats_extra=det[2], status='ats', status_note=f'{det[0]} tespit edildi')
             return res
-        jobs = generic.extract(f2, l2)
+        jobs = generic.extract(f2, l2, h2)
         if via2 == 'http':  # ATS baglantilari ve ilan listeleri cogu zaman JS ile yuklenir: gercek tarayicida da bak
             try:
                 f2, h2, l2, fr2, via2 = _page(cu, force_browser=True)
@@ -142,7 +147,7 @@ def discover(c):
                 if det and atsmod.has_reader(det[0], det[2]):
                     res.update(career_url=f2, ats=det[0], ats_slug=det[1], ats_extra=det[2], status='ats', status_note=f'{det[0]} tespit edildi')
                     return res
-                jobs2 = generic.extract(f2, l2)
+                jobs2 = generic.extract(f2, l2, h2)
                 if len(jobs2) >= len(jobs):
                     jobs = jobs2
             except Exception:  # noqa: BLE001
@@ -158,6 +163,8 @@ def discover(c):
         res.update(career_url=f2, ats='generic', ats_extra=det[0] if det else None)
     if redirect_note:
         res.update(status='yonlendirme', status_note=redirect_note)
+    elif robots_blocked and not opened:
+        res.update(status='robots', status_note='robots.txt izin vermiyor: kariyer sayfasi taranmiyor')
     else:
         res.update(status='sayfa-var-ilan-yok', status_note='kariyer sayfasi var, ilan listesi bulunamadi')
     return res

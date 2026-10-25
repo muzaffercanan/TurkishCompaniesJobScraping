@@ -63,7 +63,19 @@
       <button data-tab="log">Günlük</button>
     </nav>
     <div class="grow"></div>
-    <div class="fresh" id="fresh" title=""><i class="dot"></i><span id="freshtxt">yükleniyor…</span></div>
+    <div class="auto-wrap">
+      <button class="fresh" id="fresh" title="" aria-haspopup="dialog" aria-expanded="false"><i class="dot"></i><span id="freshtxt">yükleniyor…</span></button>
+      <div class="popover auto-pop" id="autoPop" role="dialog" aria-label="Otomatik tarama" hidden>
+        <h4>Otomatik tarama</h4>
+        <label class="switch"><input type="checkbox" id="autoOn"><i></i><span>Uygulama açıkken kendiliğinden tara</span></label>
+        <label class="field"><span>Sıklık</span><select id="autoHours">
+          <option value="6">Her 6 saatte bir</option><option value="12">Her 12 saatte bir</option><option value="24">Günde bir</option><option value="48">2 günde bir</option></select></label>
+        <label class="switch"><input type="checkbox" id="autoNotify"><i></i><span>Sana uygun yeni ilan çıkarsa masaüstü bildirimi gönder</span></label>
+        <p class="muted" id="autoInfo"></p>
+        <p class="muted fine">“Sana uygun”: junior veya staj, yazılım/teknik, Türkiye / uzaktan / konumu belirtilmemiş. Hızlı tarama yapılır; siyah pencere kapalıyken çalışmaz.</p>
+        <div class="pop-foot"><button class="btn sm" id="autoTest">Bildirimi dene</button><button class="btn sm primary" id="autoNow"><svg class="i"><use href="#i-zap"/></svg>Şimdi tara</button></div>
+      </div>
+    </div>
     <button class="icon-btn" id="btnTheme" title="Tema (t)" aria-label="Temayı değiştir"></button>
     <button class="icon-btn" id="btnHelp" title="Klavye kısayolları (?)" aria-label="Klavye kısayolları"><svg class="i"><use href="#i-keyboard"/></svg></button>
     <div class="split" id="scanSplit">
@@ -93,6 +105,12 @@
 <main class="wrap">
   <!-- ============================== İLANLAR ============================== -->
   <section id="tab-jobs">
+    <div class="fitbar" id="fitbar" role="status" hidden>
+      <span class="fit-ic"><svg class="i"><use href="#i-sparkles"/></svg></span>
+      <div class="fit-t"><b id="fitTitle"></b><span id="fitSub">Junior / staj · yazılım · Türkiye veya uzaktan · son 3 gün · henüz açmadıkların</span></div>
+      <button class="btn primary sm" id="fitGo">Göster</button>
+      <button class="icon-btn sm" id="fitHide" title="Şimdilik gizle" aria-label="Şimdilik gizle"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
     <div class="kpis" id="kpis"></div>
 
     <div class="toolbar" id="toolbar">
@@ -122,8 +140,8 @@
           <div class="pop-foot"><button class="btn ghost" id="fclear">Filtreleri sıfırla</button><button class="btn primary" id="fdone">Tamam</button></div>
         </div>
       </div>
-      <label class="sortsel"><span>Sırala</span><select id="sort">
-        <option value="new">En yeni eklenen</option><option value="posted">Yayın tarihi</option><option value="company">Firma (A–Z)</option><option value="title">Başlık (A–Z)</option></select></label>
+      <label class="sortsel" title="Firmalar her zaman büyükten küçüğe sıralanır; bu seçim firma içindeki ilan sırasıdır"><span>Firma içinde</span><select id="sort">
+        <option value="new">En yeni eklenen</option><option value="posted">Yayın tarihi</option><option value="title">Başlık (A–Z)</option></select></label>
       <div class="seg" id="viewmode" role="group" aria-label="Görünüm">
         <button data-g="0" title="Düz liste (g)"><svg class="i"><use href="#i-list"/></svg><span>Liste</span></button>
         <button data-g="1" title="Firmaya göre grupla (g)"><svg class="i"><use href="#i-layers"/></svg><span>Firmaya göre</span></button>
@@ -135,16 +153,18 @@
     <div class="subbar">
       <div class="seg views" id="views" role="tablist" aria-label="İlan görünümü"></div>
       <div class="grow"></div>
+      <button class="btn sm ghost" id="markAll" hidden title="Listedeki tüm ilanları görüldü say (geri alınabilir)"></button>
       <span class="count" id="jcount" aria-live="polite"></span>
     </div>
 
     <div class="qf">
       <button class="chip preset" id="presetFit" title="Junior + staj, yazılım/teknik, Türkiye / uzaktan"><svg class="i"><use href="#i-sparkles"/></svg>Bana uygun</button>
+      <button class="chip" id="unseenChip" title="Henüz açmadığın ilanlar (u: görüldü / görülmedi)"><i class="dot2" style="--c:var(--accent)"></i>Görülmemiş</button>
       <span class="sep"></span>
       <span class="lab">Seviye</span>
       <div class="chips" id="levels"></div>
       <span class="sep"></span>
-      <span class="lab">Eklenme</span>
+      <span class="lab" title="Yayın tarihine göre; yayın tarihi olmayanlarda firmanın ilk taramasından sonra bulunma tarihine göre. İlk taramada bulunan ilanlar 'yeni' sayılmaz.">Eklenme</span>
       <div class="seg sm" id="daychips" role="group" aria-label="Eklenme zamanı"></div>
     </div>
 
@@ -247,6 +267,7 @@
       <div><kbd>s</kbd><span>Favori ekle / çıkar</span></div>
       <div><kbd>a</kbd><span>Başvurdum işaretle</span></div>
       <div><kbd>h</kbd><span>Gizle / göster</span></div>
+      <div><kbd>u</kbd><span>Görüldü / görülmedi işaretle</span></div>
       <div><kbd>f</kbd><span>Filtreleri aç</span></div>
       <div><kbd>g</kbd><span>Firmaya göre grupla</span></div>
       <div><kbd>t</kbd><span>Tema değiştir</span></div>

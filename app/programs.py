@@ -27,6 +27,15 @@ NEGATIVE = re.compile(r'kampanya|campaign|\bkart|card|indirim|tarife|hizmetler|u
                       r'shop|sigorta|insurance|faturali|faturaya|hesap|axess|bonus|cihaz|telefon|tablet|abonelik|odeme', re.I)
 NON_TR = re.compile(r'\bu\.?s\.?\b|\busa\b|united states|canada|\buk\b|united kingdom|india|germany|deutschland|poland|'
                     r'mexico|brazil|china|japan|singapore|ireland|netherlands|spain|france|italy|sweden|australia|\bemea\b', re.I)
+# Konum: NON_TR'deki ulkeler basliktaysa sayfa zaten elenir; bunlar baslik/adreste gecerse sayfa o ulkenin programidir
+FOREIGN = re.compile(r'\b(finland|suomi|sweden|norway|denmark|estonia|hungary|romania|portugal|belgium|austria|switzerland|czechia|'
+                     r'czech republic|israel|egypt|morocco|south africa|korea|taiwan|vietnam|philippines|malaysia|indonesia|argentina|'
+                     r'chile|colombia|new zealand)\b')
+TR_PAGE = re.compile(r'turkiye|turkey|turkish|istanbul|ankara|izmir|kocaeli|gebze|bursa|antalya|eskisehir|konya|adana|kayseri|'
+                     r'sakarya|odtu|bilkent|teknokent|teknopark')
+TR_LANG = re.compile(r'\b(ve|bir|icin|ile|olarak|olan|basvuru|programi|ogrenci|mezun)\b')  # sik Turkce kelimeler: sayfa Turkce mi
+TR_PATH = re.compile(r'(^|/)tr([-_][a-z]{2})?(/|$)')
+GLOBAL_NAME = re.compile(r'\b(turkiye|turkey)\b')  # 'Ericsson Turkiye', 'Boeing Turkey': cok uluslu sirketin Turkiye kolu
 NOT_FOUND = re.compile(r'sayfa bulunamad|page not found|404 not found|aradiginiz sayfa|sayfa mevcut degil|content not ?found', re.I)
 COMMON_PATHS = ('/genc-yetenek', '/staj', '/yeni-mezun', '/kariyer/genc-yetenek', '/kariyer/staj', '/kampus', '/campus',
                 '/students', '/internship', '/early-careers')
@@ -130,6 +139,27 @@ def _kind(head, body=''):
     return 'Junior / Yeni mezun'
 
 
+def _location(url, title, nbody, company):
+    """Program sayfasinin konumu (sabit 'Türkiye' yazilmaz):
+      baslik/adres baska bir ulkeyi anlatiyorsa o ulke ('Finland');
+      .tr alan adi, /tr/ sayfasi, Turkiye/sehir adi gecmesi ya da Turkce metin -> 'Türkiye';
+      cok uluslu sirketin (kategori 'Global ...' ya da adinda Turkiye gecen) Turkiye'den soz etmeyen genel sayfasi ->
+      'Küresel program sayfası' (bolgesi Yurt disi olur, 'bana uygun'a girmez);
+      hicbiri degilse bos (Belirtilmemis: Ingilizce sayfasi olan yerli firmalar, or. Dream Games)."""
+    p = urllib.parse.urlparse(url)
+    path = urllib.parse.unquote(p.path).lower()
+    m = FOREIGN.search(norm(title + ' ' + path).replace('-', ' '))
+    if m:
+        return m.group(1).title()
+    words = len(nbody.split())
+    if host_of(url).endswith('.tr') or TR_PATH.search(path) or TR_PAGE.search(norm(title) + ' ' + nbody) or \
+            (words >= 50 and len(TR_LANG.findall(nbody)) >= 0.03 * words):
+        return 'Türkiye'
+    if GLOBAL_NAME.search(norm(company.get('name'))) or norm(company.get('category')).startswith('global'):
+        return 'Küresel program sayfası'
+    return ''
+
+
 def _deadline(t):
     """'son basvuru' ifadesine yakin ilk tarih (YYYY-MM-DD) ya da None"""
     n = norm(t)
@@ -148,22 +178,27 @@ def _fetch_page(url, min_links=5):
     """(final, html, links[(href, text, ctx, sig)]) ; duz HTTP, gerekirse gercek tarayici
     (sayfa JS ile doluyorsa ya da baglanti sayisi min_links altindaysa)"""
     try:
-        st, final, html = fetch(url, timeout=15, tries=1)
+        st, final, html = fetch(url, timeout=15, tries=1, robots=True)
         if st == 200 and not generic.looks_js_only(html):
             links = generic.links_from_html(final, html)
             if len(links) >= min_links:
                 return final, html, links
     except HttpError as e:
-        if e.status in (404, 410):
+        if e.status in (404, 410, 'robots'):
             raise
     final, html, links, _frames = browser.render(url)
     return final, html, [tuple(x) for x in links]
 
 
 def read(url, company):
-    """Program sayfasini oku ve dogrula. Gecerli degilse None."""
+    """Program sayfasini oku ve dogrula. Gecerli degilse None. robots.txt izin vermiyorsa HttpError('robots') firlatir
+    (gecici hatadan farkli: sayfa artik okunmayacak, cagiran ilanini kapatir)."""
     try:
         final, html, links = _fetch_page(url, min_links=0)
+    except HttpError as e:
+        if e.status == 'robots':
+            raise
+        return None
     except Exception:  # noqa: BLE001
         return None
     path = norm(urllib.parse.unquote(urllib.parse.urlparse(final).path))
@@ -194,7 +229,7 @@ def read(url, company):
     if deadline and deadline < dt.date.today().isoformat() and status == 'Başvuru açık':
         status = 'Durum belirsiz'  # son basvuru tarihi gecmis ama sayfada "basvur" yaziyor
     return dict(url=clean_url(final), title=title, kind=_kind(title + ' ' + path, body[:2000]), status=status,
-                deadline=deadline, text=body[:6000], hash=hashlib.sha1(nbody[:20000].encode()).hexdigest()[:16], hits=hits, links=links)
+                deadline=deadline, location=_location(final, title, nbody, company), text=body[:6000], hash=hashlib.sha1(nbody[:20000].encode()).hexdigest()[:16], hits=hits, links=links)
 
 
 def job_hosts(company):
@@ -216,7 +251,7 @@ def job_hosts(company):
 def _probe_ok(root):
     """Yaygin adres denemesine deger mi? Olmayan bir adrese 404 donmeli (her adrese 200 donen ya da engelleyen siteler atlanir)."""
     try:
-        st, final, _ = fetch(root + '/ilan-radari-olmayan-sayfa-7d3f', timeout=5, tries=1, max_bytes=200_000)
+        st, final, _ = fetch(root + '/ilan-radari-olmayan-sayfa-7d3f', timeout=5, tries=1, max_bytes=200_000, robots=True)
         return False  # 200: her adres acilir, deneme anlamsiz
     except HttpError as e:
         return e.status in (404, 410)
@@ -256,7 +291,7 @@ def discover(company, max_programs=4):
             errors = 0
             for path in COMMON_PATHS:
                 try:
-                    st, f2, h2 = fetch(root + path, timeout=5, tries=1, max_bytes=500_000)
+                    st, f2, h2 = fetch(root + path, timeout=5, tries=1, max_bytes=500_000, robots=True)
                 except HttpError as e:
                     if e.status not in (404, 410):
                         errors += 1
@@ -273,7 +308,10 @@ def discover(company, max_programs=4):
         if url in checked:
             continue
         checked.add(url)
-        p = read(url, company)
+        try:
+            p = read(url, company)
+        except HttpError:
+            continue  # robots.txt izin vermiyor
         if not p:
             continue
         sub = p.pop('links')

@@ -3,6 +3,7 @@ import unittest
 from unittest import mock
 
 from app import programs
+from app.util import norm
 
 TURKCELL = dict(id=None, name='Turkcell', website='https://turkcell.com.tr/', career_url=None)
 BANK = dict(id=None, name='Ornek Bank', website='https://www.ornekbank.com.tr/', career_url='https://kariyer.ornekbank.com.tr/')
@@ -64,6 +65,14 @@ class Read(unittest.TestCase):
         p = self._read('https://kariyerim.turkcell.com.tr/genc-yetenek',
                        page('Genç Yetenek', 'GNÇYTNK başlıyor! Yeni mezun ya da genç yetenek misin? Hemen Başvur. Genç yetenek programı.'))
         self.assertEqual((p['title'], p['status'], p['kind']), ('Genç Yetenek', 'Başvuru açık', 'Junior / Yeni mezun'))
+        self.assertEqual(p['location'], 'Türkiye')
+
+    def test_global_company_page_is_not_turkey(self):
+        ericsson = dict(id=None, name='Ericsson Türkiye', category='Telekom & Ağ', website='https://ericsson.com/', career_url=None)
+        p = self._read('https://www.ericsson.com/en/careers/students-early-careers/internships',
+                       page('Internships', 'Our internship program for students. Interns apply now. Internship and early careers. ' * 3),
+                       ericsson)
+        self.assertEqual(p['location'], 'Küresel program sayfası')
 
     def test_closed_program(self):
         p = self._read('https://kariyerim.turkcell.com.tr/gncytnkstaj',
@@ -79,6 +88,38 @@ class Read(unittest.TestCase):
         # baska ulkenin programi
         self.assertIsNone(self._read('https://kariyerim.turkcell.com.tr/internships-us-canada',
                                      page('Internships U.S. and Canada', 'internship students intern apply now internship')))
+
+
+class Location(unittest.TestCase):
+    """Program sayfasinin konumu: sabit 'Türkiye' yerine sayfadan."""
+    GLOBAL = dict(name='Ericsson Türkiye', category='Telekom & Ağ')
+    LOCAL = dict(name='Dream Games', category='Oyun')
+    EN = norm('Join our summer internship program and apply now to grow with us. ' * 8)
+    TR = norm('Staj programı için başvuru ve değerlendirme süreci bir ay sürer ve ' * 5)
+
+    def loc(self, url, title='Internships', body=EN, company=LOCAL):
+        return programs._location(url, title, body, company)
+
+    def test_turkey_signals(self):
+        self.assertEqual(self.loc('https://kariyerim.turkcell.com.tr/genc-yetenek'), 'Türkiye')             # .tr alan adi
+        self.assertEqual(self.loc('https://evreka.co/tr/kariyer/staj'), 'Türkiye')                           # /tr/ sayfasi
+        self.assertEqual(self.loc('https://x.com/internship', body=norm('Our Istanbul office hosts interns.')), 'Türkiye')
+        self.assertEqual(self.loc('https://x.com/staj', 'Staj', body=self.TR), 'Türkiye')                   # Turkce metin
+        self.assertEqual(self.loc('https://www.ericsson.com/en/careers/internships', body=norm('Internships in Istanbul, Turkey.'),
+                                  company=self.GLOBAL), 'Türkiye')
+
+    def test_foreign_country_in_title_or_path(self):
+        self.assertEqual(self.loc('https://www.nokia.com/careers/our-locations/finland/students-and-graduates/', 'Student opportunities',
+                                  company=self.GLOBAL), 'Finland')
+
+    def test_global_company_page_without_turkey(self):
+        self.assertEqual(self.loc('https://www.ericsson.com/en/careers/students-early-careers', company=self.GLOBAL),
+                         'Küresel program sayfası')
+        google = dict(name='Google', category='Global Şirket Türkiye Ofisi / Ar-Ge')
+        self.assertEqual(self.loc('https://www.google.com/about/careers/applications/students', company=google), 'Küresel program sayfası')
+
+    def test_local_company_english_page_is_unspecified(self):
+        self.assertEqual(self.loc('https://www.dreamgames.com/summer-internship'), '')
 
 
 if __name__ == '__main__':
