@@ -69,10 +69,10 @@ def _render(url, wait_ms, timeout_ms, insecure=False):
     try:
         page.goto(url, timeout=timeout_ms, wait_until='domcontentloaded')
         try:
-            page.wait_for_load_state('networkidle', timeout=4000)
+            page.wait_for_load_state('networkidle', timeout=2500)
+            page.wait_for_timeout(min(wait_ms, 400))
         except Exception:  # noqa: BLE001 - surekli istek yapan sayfalarda networkidle hic gelmeyebilir
-            pass
-        page.wait_for_timeout(wait_ms)
+            page.wait_for_timeout(min(wait_ms, 600))
         html = page.content()
         links = page.evaluate(LINKS_JS)
         frames = [f.url for f in page.frames if f.url and f.url != 'about:blank']

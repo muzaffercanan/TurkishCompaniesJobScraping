@@ -50,6 +50,7 @@ PATTERNS = [
     ('teamtailor', r'(?<![A-Za-z0-9-])([A-Za-z0-9-]{1,63})\.teamtailor\.com'),
     ('workday', r'(?<![A-Za-z0-9-])([A-Za-z0-9-]{1,63})\.(wd\d+)\.myworkdayjobs\.com/(?:[a-z]{2}-[A-Z]{2}/)?([A-Za-z0-9_-]+)'),
     ('successfactors', r'(career\d*\.successfactors\.(?:com|eu))/career\?company=([A-Za-z0-9_-]+)'),
+    ('rippling', r'ats\.rippling\.com/(?:[a-z]{2}-[A-Z]{2}/)?([A-Za-z0-9_-]+)/jobs'),
     # okuyucusu olmayanlar (genel ayristirici kullanilir, ama hangi sistem oldugu kaydedilir)
     ('comeet', r'comeet\.(?:co|com)/jobs/([A-Za-z0-9_-]+)'),
     ('icims', r'(careers?-[A-Za-z0-9-]{1,63})\.icims\.com'),
@@ -63,14 +64,16 @@ PATTERNS = [
     ('oracle', r'(?<![A-Za-z0-9.-])([A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,4}\.oraclecloud\.com)/hcmUI/CandidateExperience/[a-z]{2}/sites/([A-Za-z0-9_-]+)'),
     ('kolayik', r'(?<![A-Za-z0-9-])([A-Za-z0-9-]{1,63}\.)?kolayik\.com'),
     ('peoplise', r'(?<![A-Za-z0-9-])([A-Za-z0-9-]{1,63}\.)?peoplise\.com'),
+    ('peoplebox', r'(?<![A-Za-z0-9-])([A-Za-z0-9-]{1,63})\.peoplebox\.biz'),
+    ('hrpeak', r'(?<![A-Za-z0-9-])([A-Za-z0-9-]{1,63})\.hrpeak\.com'),
     ('kariyer.net', r'kariyer\.net/(?:firma-profil|is-ilanlari?)/([A-Za-z0-9_-]+)'),
     ('linkedin', r'linkedin\.com/company/([A-Za-z0-9_-]+)/jobs'),
 ]
 PATTERNS = [(a, re.compile(p, re.I)) for a, p in PATTERNS]
 BAD_SLUG = {'embed', 'api', 'v1', 'jobs', 'job', 'www', 'careers', 'career', 'apply', 'static', 'assets', 'cdn', 'js', 'images',
-            'app', 'help', 'support', 'blog', 'en', 'tr', 'de'}
+            'app', 'help', 'support', 'blog', 'en', 'tr', 'de', 'careers-analytics', 'analytics', 'widget', 'portal'}
 READERS = {'lever', 'greenhouse', 'ashby', 'workable', 'smartrecruiters', 'recruitee', 'personio', 'bamboohr', 'breezy',
-           'pinpoint', 'teamtailor', 'workday', 'successfactors', 'manatal', 'jazzhr'}
+           'pinpoint', 'teamtailor', 'workday', 'successfactors', 'manatal', 'jazzhr', 'rippling'}
 REDIRECT_ONLY = {'kariyer.net', 'linkedin'}
 
 
@@ -82,12 +85,20 @@ def has_reader(ats, extra=None):
 
 
 _DATA_URI = re.compile(r'data:[a-z/+.-]+;base64,[A-Za-z0-9+/=]{64,}|[A-Za-z0-9+/=]{2000,}')
+_RMK_SIG = re.compile(r'j2w\.(?:kickstart|init)|class=["\'][^"\']*jobTitle-link', re.I)
 
 
 def detect(blob):
     """Sayfa HTML'i + linkler + son URL icinde ATS izi ara. Okuyucusu olan ATS'ler oncelikli."""
     blob = _DATA_URI.sub(' ', blob)  # gomulu base64 verisi: hem gereksiz hem regex'i yavaslatir
     found = []
+    u0 = re.match(r'\s*https?://([A-Za-z0-9.-]+)', blob)
+    phost = u0.group(1).lower() if u0 else ''
+    pslug = next((p for p in phost.split('.') if p not in BAD_SLUG), phost.split('.')[0]) if phost else ''
+    if phost and 'recruitee.com' not in phost and 'careers-analytics.recruitee.com' in blob:
+        found.append(('recruitee', pslug, phost))
+    if phost and 'successfactors' not in phost and _RMK_SIG.search(blob):
+        found.append(('successfactors', pslug, phost))
     for ats, rx in PATTERNS:
         for m in rx.finditer(blob):
             g = [x for x in m.groups() if x is not None]
@@ -104,7 +115,7 @@ def detect(blob):
             break
     if not found:
         return None
-    rank = lambda f: (0 if f[0] in READERS else 2 if f[0] in REDIRECT_ONLY else 1)
+    rank = lambda f: (0 if has_reader(f[0], f[2]) else 2 if f[0] in REDIRECT_ONLY else 1)
     return sorted(found, key=rank)[0]
 
 
@@ -161,7 +172,8 @@ def smartrecruiters(slug, extra=None):
 
 
 def recruitee(slug, extra=None):
-    d = fetch_json(f'https://{slug}.recruitee.com/api/offers/')
+    host = extra or f'{slug}.recruitee.com'
+    d = fetch_json(f'https://{host}/api/offers/')
     return [dict(id=str(j['id']), title=j.get('title', ''), location=j.get('location') or j.get('city') or '', team=j.get('department') or '',
                  url=j.get('careers_url', ''), posted=_d(j.get('published_at') or j.get('created_at')), remote=bool(j.get('remote')),
                  desc=text((j.get('description') or '') + ' ' + (j.get('requirements') or '')))
@@ -347,9 +359,24 @@ def jazzhr(slug, extra=None):
     return out
 
 
+def rippling(slug, extra=None):
+    """Rippling ATS (ats.rippling.com/<slug>/jobs): herkese acik JSON liste ucu."""
+    d = fetch_json(f'https://api.rippling.com/platform/api/ats/v1/board/{slug}/jobs')
+    out = []
+    for j in d if isinstance(d, list) else d.get('items', []):
+        uid = j.get('uuid') or j.get('id')
+        loc = (j.get('workLocation') or {}).get('label') or ', '.join(x.get('name', '') for x in (j.get('locations') or []) if x.get('name'))
+        dept = j.get('department') or {}
+        out.append(dict(id=str(uid), title=j.get('name', ''), location=loc or '', team=dept.get('label') or dept.get('name') or '',
+                        url=j.get('url') or f'https://ats.rippling.com/{slug}/jobs/{uid}', posted=_d(j.get('createdOn')), remote='remote' in norm(loc),
+                        detail=('rippling', f'https://api.rippling.com/platform/api/ats/v1/board/{slug}/jobs/{uid}')))
+    return out
+
+
 FETCHERS = {'lever': lever, 'greenhouse': greenhouse, 'ashby': ashby, 'workable': workable, 'smartrecruiters': smartrecruiters,
             'recruitee': recruitee, 'personio': personio, 'bamboohr': bamboohr, 'breezy': breezy, 'pinpoint': pinpoint,
-            'teamtailor': teamtailor, 'workday': workday, 'successfactors': successfactors, 'manatal': manatal, 'jazzhr': jazzhr}
+            'teamtailor': teamtailor, 'workday': workday, 'successfactors': successfactors, 'manatal': manatal, 'jazzhr': jazzhr,
+            'rippling': rippling}
 
 
 def fetch_jobs(ats, slug, extra=None):

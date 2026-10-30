@@ -51,6 +51,10 @@ class Search(unittest.TestCase):
     def test_empty_query_matches_all(self):
         self.assertEqual(self.ids('   '), [1, 2, 3, 4, 5])
 
+    def test_negative_terms_exclude_matches(self):
+        self.assertEqual(self.ids('yazilim -istanbul'), [3])
+        self.assertEqual(self.ids('-ankara -bursa -remote'), [1, 3])
+
 
 def day(offset):
     return (dt.date.today() - dt.timedelta(days=offset)).isoformat()
@@ -157,6 +161,44 @@ class Migration(TempDb):
         # 1: ilk taramanin ayni gunu -> baseline; 2: sonraki gun bulundu -> yeni (+ basvurulmus -> gorulmus);
         # 3: bu kaynak icin hic basarili tarama kaydi yok -> kanit yok, baseline sayilir
         self.assertEqual(got, {1: (1, 0), 2: (0, 1), 3: (1, 0)})
+
+
+class ServerFeatures(TempDb):
+    def setUp(self):
+        super().setUp()
+        from app import server
+        self.client = server.app.test_client()
+        self.con.execute("UPDATE companies SET size='Orta', category='Fintech', city='İstanbul' WHERE id=1")
+        self.con.executemany(
+            "INSERT INTO jobs(id, company_id, source, ext_id, title, location, region, level, is_tech, exp_min, first_seen, posted, active) "
+            "VALUES(?,1,'lever',?,?,?,?,?,1,?,?,?,1)",
+            [
+                (10, '10', 'Backend Developer', 'İstanbul', 'Türkiye', 'Junior / Yeni mezun', 1, '2026-10-20', '2026-10-20'),
+                (11, '11', 'Senior Backend Developer', 'İstanbul', 'Türkiye', 'Kıdemli+', 5, '2026-10-25', '2026-10-25'),
+            ]
+        )
+        self.con.commit()
+
+    def test_jobs_filter_max_exp_negative_query_and_global_sort(self):
+        r = self.client.get('/api/jobs?max_exp=2').get_json()
+        self.assertEqual([j['id'] for j in r], [10])
+        r2 = self.client.get('/api/jobs?q=backend+-senior').get_json()
+        self.assertEqual([j['id'] for j in r2], [10])
+        r3 = self.client.get('/api/jobs?sort=global_new').get_json()
+        self.assertEqual([j['id'] for j in r3], [11, 10])
+
+    def test_application_stage_and_note_preview(self):
+        self.client.post('/api/jobs/10', json={'stage': 'teknik', 'note': 'Teknik mulakat haftaya Carsamba'})
+        r = self.client.get('/api/jobs?applied=only&stage=teknik').get_json()
+        self.assertEqual(len(r), 1)
+        self.assertEqual(r[0]['stage'], 'teknik')
+        self.assertTrue(r[0]['applied_at'])
+        self.assertIn('Teknik mulakat', r[0]['note_preview'])
+
+    def test_companies_filter_by_size_category_city(self):
+        r = self.client.get('/api/companies?size=Orta&category=Fintech&city=İstanbul').get_json()
+        self.assertEqual([c['id'] for c in r], [1])
+        self.assertEqual(self.client.get('/api/companies?city=Ankara').get_json(), [])
 
 
 if __name__ == '__main__':

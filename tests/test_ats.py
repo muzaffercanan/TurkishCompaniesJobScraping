@@ -116,5 +116,36 @@ class WorkdayReader(unittest.TestCase):
         self.assertFalse(jobs.confirmed)
 
 
+class RipplingAndCustomDomainAts(unittest.TestCase):
+    def test_rippling_reader(self):
+        payload = {'items': [
+            {'uuid': 'u1', 'name': 'Backend Engineer', 'url': 'https://ats.rippling.com/black-kite/jobs/u1',
+             'locations': [{'name': 'Istanbul, Turkey'}], 'department': {'name': 'Engineering'}, 'createdOn': '2026-10-15T10:00:00Z'}
+        ], 'totalPages': 1}
+        with mock.patch.object(ats, 'fetch_json', return_value=payload):
+            jobs = ats.rippling('black-kite')
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]['id'], 'u1')
+        self.assertEqual(jobs[0]['title'], 'Backend Engineer')
+        self.assertEqual(jobs[0]['location'], 'Istanbul, Turkey')
+        self.assertEqual(jobs[0]['team'], 'Engineering')
+        self.assertEqual(jobs[0]['posted'], '2026-10-15')
+
+    def test_recruitee_custom_domain_detect_and_read(self):
+        blob = 'https://careers.obilet.com/\n<script src="https://careers-analytics.recruitee.com/analytics.js"></script><a href="/o/yazilim-uzmani">Job</a>'
+        det = ats.detect(blob)
+        self.assertEqual(det, ('recruitee', 'obilet', 'careers.obilet.com'))
+        with mock.patch.object(ats, 'fetch_json', return_value={'offers': [{'id': 7, 'title': 'Go Developer', 'location': 'Istanbul', 'careers_url': 'https://careers.obilet.com/o/go'}]}) as fj:
+            jobs = ats.recruitee('obilet', 'careers.obilet.com')
+            fj.assert_called_once_with('https://careers.obilet.com/api/offers/')
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]['title'], 'Go Developer')
+
+    def test_successfactors_rmk_custom_domain_detect(self):
+        blob = 'https://career.yasar.com.tr/\n<script>var j2w = j2w || {}; j2w.init({ "company" : "Yaşar" });</script><form class="talentCommunitySearch"></form>'
+        det = ats.detect(blob)
+        self.assertEqual(det, ('successfactors', 'yasar', 'career.yasar.com.tr'))
+
+
 if __name__ == '__main__':
     unittest.main()

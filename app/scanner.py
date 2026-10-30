@@ -30,10 +30,21 @@ def is_job_board(website):
     h = host_of(website or '')
     return any(h == b or h.endswith('.' + b) for b in JOB_BOARDS)
 
-STATE = dict(running=False, mode=None, auto=False, phase='', total=0, done=0, current='', started=None, finished=None,
+STATE = dict(running=False, stopping=False, mode=None, auto=False, phase='', total=0, done=0, current='', started=None, finished=None,
              new=0, fresh=0, fit=0, closed=0, ok=0, failed=0, log=collections.deque(maxlen=500))
 _NEW_IDS = []  # bu taramada eklenen ilanlarin kimlikleri (tarama sonunda "yeni" / "bana uygun" sayimi icin)
 _run_lock = threading.Lock()
+_stop = threading.Event()
+
+
+def stop():
+    """Calisan taramayi durdurma istegi: mevcut firma bitince is parcaciklari temiz sekilde cikar."""
+    if STATE['running']:
+        _stop.set()
+        STATE['stopping'] = True
+        _log('durdurma istegi alindi, mevcut adimlar tamamlaninca tarama duracak...')
+        return True
+    return False
 REDISCOVER_DAYS = 14  # kariyer sayfasi bulunamayan firmalar bu kadar gunde bir yeniden kesfedilir
 BURST_MIN, BURST_RATIO = 50, 2  # tek taramada bundan fazla VE onceki aktif sayinin 2 katindan fazla yeni ilan = gercek yeni degil, ilk tam okuma
 
@@ -412,7 +423,7 @@ def _browser_pool(con, rows, workers, force=False, fn=None):
 
     def worker():
         try:
-            while True:
+            while not _stop.is_set():
                 try:
                     c = q.get_nowait()
                 except queue.Empty:
@@ -466,7 +477,8 @@ def run(mode='hizli', company_id=None, auto=False):
         return False
     con = db.connect()
     started = dt.datetime.now().isoformat(timespec='seconds')
-    STATE.update(running=True, mode=mode, auto=auto, phase='hazirlaniyor', total=0, done=0, current='', started=started, finished=None,
+    _stop.clear()
+    STATE.update(running=True, stopping=False, mode=mode, auto=auto, phase='hazirlaniyor', total=0, done=0, current='', started=started, finished=None,
                  new=0, fresh=0, fit=0, closed=0, ok=0, failed=0)
     STATE['log'].clear()
     _NEW_IDS.clear()
@@ -505,28 +517,37 @@ def run(mode='hizli', company_id=None, auto=False):
             c = dict(db.tl().execute('SELECT * FROM companies WHERE id=?', (company_id,)).fetchone())
             STATE.update(total=1, phase=f'{c["name"]} yeniden kesfediliyor')
             _browser_pool(con, [c], 1, force=True)
+        elif mode == 'hatali':
+            err_rows = [dict(r) for r in db.tl().execute(
+                "SELECT * FROM companies WHERE merged_into IS NULL AND (status='hata' OR id IN ("
+                "SELECT company_id FROM (SELECT company_id, ok, ROW_NUMBER() OVER (PARTITION BY company_id ORDER BY id DESC) AS n FROM source_runs) WHERE n=1 AND ok=0))")]
+            STATE.update(total=len(err_rows), phase='sorunlu / hata veren kaynaklar yeniden taranıyor')
+            _log(f'{len(err_rows)} sorunlu kaynak yeniden taraniyor')
+            _browser_pool(con, err_rows, workers=4, force=True)
         else:
             known = [dict(r) for r in db.tl().execute(known_sql)]
             STATE.update(total=len(known), phase='bilinen kaynaklar (ATS + ozel okuyucular)')
             _log(f'{len(known)} bilinen kaynak taraniyor')
 
             def one(c):
+                if _stop.is_set():
+                    return
                 STATE['current'] = c['name']
                 scan_known(con, c)
                 STATE['done'] += 1
             with ThreadPoolExecutor(10) as ex:
                 list(ex.map(one, known))
-            if mode == 'hizli':
+            if mode == 'hizli' and not _stop.is_set():
                 gen = [dict(r) for r in db.tl().execute("SELECT * FROM companies WHERE merged_into IS NULL AND ats='generic' AND status='genel' AND career_url IS NOT NULL")]
                 STATE.update(total=STATE['total'] + len(gen), phase='kariyer sayfasindan ilan veren firmalar')
                 _log(f'{len(gen)} kariyer sayfasi yeniden okunuyor')
                 _browser_pool(con, gen, workers=4)
                 progs = [dict(r) for r in db.tl().execute("SELECT * FROM companies WHERE merged_into IS NULL AND program_urls IS NOT NULL")]
-                if progs:
+                if progs and not _stop.is_set():
                     STATE.update(total=STATE['total'] + len(progs), phase='bilinen program sayfaları (genç yetenek / staj)')
                     _log(f'{len(progs)} firmanin program sayfasi yeniden okunuyor')
                     _browser_pool(con, progs, workers=4, fn=scan_programs)
-            if mode == 'tam':
+            if mode == 'tam' and not _stop.is_set():
                 rest = [dict(r) for r in db.tl().execute(
                     "SELECT * FROM companies WHERE merged_into IS NULL AND (NOT (ats IN ({}) OR ats='custom') OR ats IS NULL) ORDER BY "
                     "CASE WHEN size LIKE 'Büyük%' THEN 0 WHEN size LIKE 'Orta%' THEN 1 ELSE 2 END, id"
@@ -534,7 +555,7 @@ def run(mode='hizli', company_id=None, auto=False):
                 STATE.update(total=STATE['total'] + len(rest), phase='kariyer sayfalari (kesif + gercek tarayici)')
                 _log(f'{len(rest)} firmanin kariyer sayfasi taraniyor')
                 _browser_pool(con, rest, workers=6)
-        _log(f'bitti: {STATE["new"]} yeni, {STATE["closed"]} kapanan ilan, {STATE["failed"]} hata')
+        _log(('durduruldu' if _stop.is_set() else 'bitti') + f': {STATE["new"]} yeni, {STATE["closed"]} kapanan ilan, {STATE["failed"]} hata')
     except Exception:  # noqa: BLE001
         _log('BEKLENMEYEN HATA: ' + traceback.format_exc()[-300:])
         log.error('beklenmeyen tarama hatasi', exc_info=True)
@@ -550,7 +571,7 @@ def run(mode='hizli', company_id=None, auto=False):
         fin = dt.datetime.now().isoformat(timespec='seconds')
         db.write(db.tl(), 'INSERT INTO scans(started,finished,mode,companies,ok,failed,new_jobs,closed_jobs) VALUES(?,?,?,?,?,?,?,?)',
                  (started, fin, mode, STATE['total'], STATE['ok'], STATE['failed'], STATE['new'], STATE['closed']))
-        STATE.update(running=False, finished=fin, phase='bitti', current='')
+        STATE.update(running=False, stopping=False, finished=fin, phase='durduruldu' if _stop.is_set() else 'bitti', current='')
         _run_lock.release()
     return True
 

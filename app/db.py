@@ -63,12 +63,19 @@ FIT = "(j.level IN ('Junior / Yeni mezun','Staj') AND j.is_tech=1 AND j.region I
 
 
 def search_clauses(q, cols):
-    """Arama kutusu metnini SQL kosullarina cevirir: her kelime sutunlardan en az birinde gecmeli (kelime sirasi onemsiz).
+    """Arama kutusu metnini SQL kosullarina cevirir: her kelime sutunlardan en az birinde gecmeli (kelime sirasi onemsiz;
+    basinda '-' olan kelimeler ise hicbir sutunda gecmemeli: or. 'backend -senior').
     Dondurur: ([kosul, ...], [arguman, ...]). Sutunlar trn() ile sadelestirilir."""
     clauses, args = [], []
     for w in fold(q).split():
+        neg = w.startswith('-') and len(w) > 1
+        if neg:
+            w = w[1:]
         w = w.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-        clauses.append('(' + ' OR '.join(f"trn({c}) LIKE ? ESCAPE '\\'" for c in cols) + ')')
+        if neg:
+            clauses.append('(' + ' AND '.join(f"COALESCE(trn({c}), '') NOT LIKE ? ESCAPE '\\'" for c in cols) + ')')
+        else:
+            clauses.append('(' + ' OR '.join(f"trn({c}) LIKE ? ESCAPE '\\'" for c in cols) + ')')
         args += [f'%{w}%'] * len(cols)
     return clauses, args
 
@@ -90,7 +97,7 @@ def connect():
     jcols = {r[1] for r in con.execute('PRAGMA table_info(jobs)')}
     for col, typ in (('region', 'TEXT'), ('description', 'TEXT'), ('exp_min', 'INTEGER'), ('detail_checked', 'INTEGER'),
                      ('detail_kind', 'TEXT'), ('detail_url', 'TEXT'), ('starred', 'INTEGER DEFAULT 0'), ('note', 'TEXT'),
-                     ('is_baseline', 'INTEGER DEFAULT 0'), ('seen', 'INTEGER DEFAULT 0')):
+                     ('is_baseline', 'INTEGER DEFAULT 0'), ('seen', 'INTEGER DEFAULT 0'), ('stage', 'TEXT'), ('applied_at', 'TEXT')):
         if col not in jcols:
             con.execute(f'ALTER TABLE jobs ADD COLUMN {col} {typ}')
             if col == 'is_baseline':  # eski kayitlar: kaynagin daha onceki bir gunde basarili taramasi yoksa ilk taramadandir
@@ -100,6 +107,9 @@ def connect():
                 con.commit()
             elif col == 'seen':  # kullanicinin zaten islem yaptigi ilanlar gorulmus sayilir
                 con.execute("UPDATE jobs SET seen=1 WHERE applied=1 OR hidden=1 OR starred=1 OR (note IS NOT NULL AND note!='')")
+                con.commit()
+            elif col == 'stage':
+                con.execute("UPDATE jobs SET stage='basvuruldu' WHERE applied=1 AND stage IS NULL")
                 con.commit()
     con.create_function('trn', 1, fold, deterministic=True)  # arama / siralama: SQL'de trn(sutun)
     return con

@@ -25,6 +25,11 @@ const STATUS = {
   erisilemedi:['Erişilemedi','bad'], 'ilan-sitesi':['İlan sitesi (taranmaz)',''], robots:['robots.txt engeli',''], mukerrer:['Mükerrer (taranmaz)',''], hata:['Hata','bad'], taranmadi:['Taranmadı',''],
 };
 const REGION_LABEL = {'tr+':'Türkiye + uzaktan', 'Türkiye':'Türkiye', 'Uzaktan':'Uzaktan', 'Yurt dışı':'Yurt dışı'};
+const MAX_EXP_LABEL = {'1':'≤ 1 yıl', '2':'≤ 2 yıl', '3':'≤ 3 yıl', '5':'≤ 5 yıl'};
+const STAGE_MAP = {
+  basvuruldu:['Başvuruldu', 'ok'], ik:['İK / Ön görüşme', 'teal'], teknik:['Teknik / Mülakat', 'mid'], teklif:['Teklif', 'jr'], red:['Olumsuz', 'bad'],
+};
+const KW_CHIPS = ['Backend', 'Frontend', 'Full Stack', 'Mobile', 'Data', 'AI', 'DevOps', 'QA', 'Game', '.NET', 'Java', 'Python', 'Go', 'React'];
 const DAY_OPTS = [['', 'Hepsi'], ['0', 'Bugün'], ['3', '3 gün'], ['7', '7 gün'], ['30', '30 gün']];
 const VIEWS = [['all', 'Tümü'], ['starred', 'Favoriler'], ['applied', 'Başvurduklarım'], ['hidden', 'Gizlenenler']];
 const TABS = ['jobs', 'companies', 'links', 'health', 'log'];
@@ -32,11 +37,11 @@ const HUES = [222, 250, 275, 300, 330, 350, 12, 28, 165, 185, 200, 212];
 const EXP_RE = /\b\d{1,2}(?:\s*[-–]\s*\d{1,2})?\+?\s*(?:years?\b|yrs?\b|yıl|yil|sene)|yeni mezun\w*|new[\s-]?grads?\b|fresh graduates?\b|entry[\s-]level|\binterns?\b|\binternship\b|\bstaj\w*|tecrübe\s+(?:şartı|aranmamaktadır)|deneyim\s+(?:şartı|aranmamaktadır)|no experience required/gi;
 
 // ---------------------------------------------------------------- durum
-const DEFAULTS = {q:'', indesc:false, levels:[], days:'', region:'', category:'', city:'', size:'', source:'', tech:false,
+const DEFAULTS = {q:'', indesc:false, levels:[], days:'', region:'', category:'', city:'', size:'', source:'', maxExp:'', stage:'', tech:false,
   hideApplied:false, closed:false, unseen:false, view:'all', sort:'new', group:false, dense:false};
 const S = Object.assign({}, DEFAULTS, store.get('state', {}));
 S.levels = new Set(S.levels || []);
-if(!['new', 'posted', 'title'].includes(S.sort)) S.sort = 'new';  // firmalar her zaman buyukten kucuge; secim firma ici siradir
+if(!['new', 'posted', 'title', 'global_new', 'global_posted'].includes(S.sort)) S.sort = 'new';
 S.companyId = null; S.companyName = '';
 const saveState = () => store.set('state', {...S, levels:[...S.levels], companyId:undefined, companyName:undefined});
 
@@ -76,7 +81,7 @@ function highlight(text, specs){
 }
 const hl = s => TERM_RE ? highlight(s, [{re:TERM_RE, fold:true}]) : esc(s);
 function buildTerms(){
-  const t = fold(S.q.trim()).split(/\s+/).filter(w => w.length >= 2).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const t = fold(S.q.trim()).split(/\s+/).filter(w => w.length >= 2 && !w.startsWith('-')).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   TERM_RE = t.length ? new RegExp(t.join('|'), 'g') : null;
 }
 function countUp(el, to){
@@ -152,7 +157,12 @@ async function loadMeta(){
     const k = id.slice(1); if(S[k] && !vals.includes(S[k])) S[k] = ''; el.value = S[k]; };
   fill('#category', meta.categories, 'Tüm kategoriler'); fill('#city', meta.cities, 'Tüm şehirler');
   fill('#size', meta.sizes, 'Tüm büyüklükler'); fill('#source', meta.sources, 'Tüm kaynaklar');
+  const fillCo = (id, vals, label) => { const el = $(id); if(!el) return; const v = el.value;
+    el.innerHTML = `<option value="">${label}</option>` + vals.map(x => `<option>${esc(x)}</option>`).join(''); el.value = v; };
+  fillCo('#csize', meta.sizes, 'Tüm büyüklükler'); fillCo('#ccat', meta.categories, 'Tüm kategoriler'); fillCo('#ccity', meta.cities, 'Tüm şehirler');
   $('#levels').innerHTML = meta.levels.map(l => `<button class="chip lv-${(LEVELS[l] || LEVELS['Belirtilmemiş']).cls}" data-l="${esc(l)}"><i class="dot2"></i>${esc(l)}</button>`).join('');
+  $('#stages').innerHTML = `<button class="chip" data-st="">Tümü</button>` + Object.entries(STAGE_MAP)
+    .map(([k, [l, cls]]) => `<button class="chip lv-${cls === 'ok' ? 'jr' : cls === 'bad' ? 'staj' : cls}" data-st="${k}"><i class="dot2"></i>${esc(l)}</button>`).join('');
   const cs = $('#cstatus'), cv = cs.value;
   cs.innerHTML = '<option value="">Tüm durumlar</option>' + Object.entries(meta.statuses).sort((a, b) => b[1] - a[1])
     .map(([k, n]) => `<option value="${k}">${(STATUS[k] || [k])[0]} (${n})</option>`).join('');
@@ -261,11 +271,12 @@ function params(){
   S.levels.forEach(l => p.append('level', l));
   if(S.days !== '') p.set('days', S.days);
   if(S.region) p.set('region', S.region);
+  if(S.maxExp) p.set('max_exp', S.maxExp);
   if(S.tech) p.set('tech', '1');
   if(S.unseen) p.set('unseen', '1');
   if(S.companyId) p.set('company_id', S.companyId);
   if(v === 'starred'){ p.set('starred', 'only'); p.set('active', '0'); p.set('hidden', '1'); }
-  else if(v === 'applied'){ p.set('applied', 'only'); p.set('active', '0'); p.set('hidden', '1'); }
+  else if(v === 'applied'){ p.set('applied', 'only'); p.set('active', '0'); p.set('hidden', '1'); if(S.stage) p.set('stage', S.stage); }
   else if(v === 'hidden') p.set('hidden', 'only');
   else { if(S.hideApplied) p.set('applied', 'hide'); if(S.closed) p.set('active', '0'); }
   p.set('sort', S.sort);
@@ -275,25 +286,30 @@ const POP_FILTERS = {
   region:() => S.region && ['region', 'Konum: ' + (REGION_LABEL[S.region] || S.region)],
   category:() => S.category && ['category', S.category], city:() => S.city && ['city', 'Şehir: ' + S.city],
   size:() => S.size && ['size', S.size], source:() => S.source && ['source', 'Kaynak: ' + S.source],
+  maxExp:() => S.maxExp && ['maxExp', 'Deneyim: ' + (MAX_EXP_LABEL[S.maxExp] || '≤ ' + S.maxExp + ' yıl')],
   tech:() => S.tech && ['tech', 'Yazılım / teknik'], indesc:() => S.indesc && ['indesc', 'Açıklamada ara'],
   hideApplied:() => S.hideApplied && ['hideApplied', 'Başvurulanlar gizli'], closed:() => S.closed && ['closed', 'Kapananlar dahil'],
 };
 const popTags = () => Object.values(POP_FILTERS).map(f => f()).filter(Boolean);
-const anyFilter = () => !!(popTags().length || S.companyId || S.q.trim() || S.levels.size || S.days !== '' || S.unseen);
+const anyFilter = () => !!(popTags().length || S.companyId || S.q.trim() || S.levels.size || S.days !== '' || S.unseen || (S.view === 'applied' && S.stage));
 function resetFilters(){
-  Object.assign(S, {q:'', indesc:false, levels:new Set(), days:'', region:'', category:'', city:'', size:'', source:'', tech:false,
+  Object.assign(S, {q:'', indesc:false, levels:new Set(), days:'', region:'', category:'', city:'', size:'', source:'', maxExp:'', stage:'', tech:false,
     hideApplied:false, closed:false, unseen:false, companyId:null, companyName:'', view:'all'});
 }
 function changed(){ syncUI(); loadJobs(); }
 function syncUI(){
   if($('#q').value !== S.q) $('#q').value = S.q;
   $('#qclear').hidden = !S.q; $('#qkbd').hidden = !!S.q;
-  for(const k of ['region', 'category', 'city', 'size', 'source']) if($('#' + k).value !== S[k]) $('#' + k).value = S[k];
+  for(const k of ['region', 'category', 'city', 'size', 'source', 'maxExp']) if($('#' + k).value !== S[k]) $('#' + k).value = S[k];
   for(const k of ['tech', 'indesc', 'hideApplied', 'closed']) $('#' + k).checked = S[k];
   $('#sort').value = S.sort;
   $$('#viewmode button').forEach(b => b.classList.toggle('on', (b.dataset.g === '1') === S.group));
   $('#btnDense').setAttribute('aria-pressed', S.dense); document.body.classList.toggle('dense', S.dense);
   $$('#levels .chip').forEach(c => c.classList.toggle('on', S.levels.has(c.dataset.l)));
+  const ql = fold(S.q.trim());
+  $$('#kwchips .chip').forEach(c => c.classList.toggle('on', ql.split(/\s+/).includes(fold(c.dataset.kw)) || (c.dataset.kw.includes(' ') && ql.includes(fold(c.dataset.kw)))));
+  $('#stagebar').hidden = S.view !== 'applied';
+  $$('#stages .chip').forEach(c => c.classList.toggle('on', c.dataset.st === S.stage));
   $$('#daychips button').forEach(b => b.classList.toggle('on', b.dataset.d === S.days));
   $$('#views button').forEach(b => b.classList.toggle('on', b.dataset.v === S.view));
   $('#presetFit').classList.toggle('on', fitOn()); $('#unseenChip').classList.toggle('on', S.unseen);
@@ -312,7 +328,8 @@ $('#levels').addEventListener('click', e => { const l = e.target.closest('[data-
 $('#active').addEventListener('click', e => { const k = e.target.closest('[data-clr]')?.dataset.clr; if(!k) return;
   if(k === 'all') resetFilters(); else if(k === 'company'){ S.companyId = null; S.companyName = ''; } else S[k] = typeof S[k] === 'boolean' ? false : '';
   changed(); });
-for(const k of ['region', 'category', 'city', 'size', 'source']) $('#' + k).onchange = e => { S[k] = e.target.value; changed(); };
+for(const k of ['region', 'category', 'city', 'size', 'source', 'maxExp']) $('#' + k).onchange = e => { S[k] = e.target.value; changed(); };
+$('#stages').addEventListener('click', e => { const b = e.target.closest('[data-st]'); if(!b) return; S.stage = b.dataset.st; changed(); });
 for(const k of ['tech', 'indesc', 'hideApplied', 'closed']) $('#' + k).onchange = e => { S[k] = e.target.checked; changed(); };
 $('#sort').onchange = e => { S.sort = e.target.value; changed(); };
 $('#q').addEventListener('input', e => { S.q = e.target.value; $('#qclear').hidden = !S.q; $('#qkbd').hidden = !!S.q; reload(); });
@@ -324,6 +341,15 @@ $('#fdone').onclick = () => togglePop(false);
 function togglePop(open){ const p = $('#fpop'); open = open ?? p.hidden; p.hidden = !open; $('#btnFilters').setAttribute('aria-expanded', open); }
 $('#btnFilters').onclick = () => togglePop();
 $('#viewmode').addEventListener('click', e => { const g = e.target.closest('[data-g]')?.dataset.g; if(g == null) return; S.group = g === '1'; syncUI(); saveState(); render(); });
+$('#kwchips').innerHTML = KW_CHIPS.map(k => `<button class="chip" data-kw="${esc(k)}">${esc(k)}</button>`).join('');
+$('#kwchips').addEventListener('click', e => {
+  const kw = e.target.closest('[data-kw]')?.dataset.kw; if(!kw) return;
+  const fkw = fold(kw), curQ = S.q.trim();
+  if(fold(curQ) === fkw) S.q = '';
+  else if(fold(curQ).split(/\s+/).includes(fkw)) S.q = curQ.split(/\s+/).filter(w => fold(w) !== fkw).join(' ');
+  else S.q = (curQ ? curQ + ' ' : '') + kw.toLowerCase();
+  changed();
+});
 $('#daychips').innerHTML = DAY_OPTS.map(([v, l]) => `<button data-d="${v}">${l}</button>`).join('');
 $('#daychips').addEventListener('click', e => { const b = e.target.closest('[data-d]'); if(!b) return; S.days = b.dataset.d; changed(); });
 function buildViews(){
@@ -347,6 +373,7 @@ const visible = r => S.view === 'starred' ? !!r.starred : S.view === 'applied' ?
 
 function jobRow(r, grouped){
   const lv = LEVELS[r.level] || LEVELS['Belirtilmemiş'], isNew = !!r.is_new;
+  const st = STAGE_MAP[r.stage || 'basvuruldu'] || STAGE_MAP.basvuruldu;
   const loc = r.location ? `<span class="mi loc" title="${esc(r.location)}">${icon('pin')}${hl(r.location)}</span>` : '';
   const rg = r.region === 'Uzaktan' ? '<span class="pill teal">Uzaktan</span>' : r.region === 'Yurt dışı' ? `<span class="pill na">${icon('globe')}Yurt dışı</span>` : '';
   const tip = `İlk görüldü: ${r.first_seen || '–'}` + (r.posted ? ` · Yayın: ${r.posted}` : '');
@@ -354,8 +381,9 @@ function jobRow(r, grouped){
     ${grouped ? '' : avatar(r.company)}
     <div class="jmain">
       <div class="jt"><a class="jlink" href="${esc(r.url)}" target="_blank" rel="noopener">${hl(r.title)}</a>
-        ${isNew ? '<span class="new" title="Son 3 günde eklendi">YENİ</span>' : ''}${!r.active ? '<span class="pill closed">kapandı</span>' : ''}${r.applied ? `<span class="pill ok">${icon('check')}Başvuruldu</span>` : ''}${r.has_note ? `<span class="note-ic" title="Notun var">${icon('note')}</span>` : ''}</div>
+        ${isNew ? '<span class="new" title="Son 3 günde eklendi">YENİ</span>' : ''}${!r.active ? '<span class="pill closed">kapandı</span>' : ''}${r.applied ? `<span class="pill ${st[1]}" title="${r.applied_at ? 'Başvuru tarihi: ' + esc(r.applied_at) : 'Başvuruldu'}">${icon('check')}${esc(st[0])}</span>` : ''}${r.has_note && !r.note_preview ? `<span class="note-ic" title="Notun var">${icon('note')}</span>` : ''}</div>
       <div class="jsub">${grouped ? '' : `<span class="co">${hl(r.company)}</span>`}${loc || (grouped ? '' : '<span class="mi faint">konum belirtilmemiş</span>')}${rg}<span class="pill ${lv.cls} only-sm">${esc(r.level)}</span>${r.team ? `<span class="mi" title="Takım / departman">${esc(r.team)}</span>` : ''}</div>
+      ${r.note_preview ? `<div class="jnote" title="${esc(r.note_preview)}">${icon('note')}<span>${esc(r.note_preview)}</span></div>` : ''}
     </div>
     <div class="jmeta"><span class="pill ${lv.cls}">${esc(r.level)}</span>
       <div class="row2">${r.exp_min != null ? `<span class="exp">en az ${r.exp_min} yıl</span>` : `<span class="src${r.source === 'genel' ? ' genel' : ''}" title="${r.source === 'genel' ? 'Kariyer sayfasından otomatik çıkarıldı; arada ilan olmayan bağlantılar olabilir' : 'Kaynak'}">${esc(r.source)}</span>`}<span title="${esc(tip)}">${ago(r.first_seen)}</span></div></div>
@@ -472,13 +500,22 @@ const FLAG_MSG = {
 const FLAG_KEY = {star:'starred', applied:'applied', hide:'hidden'};
 async function setFlag(id, key, val, quiet){
   const r = byId.get(id); if(!r) return;
-  const prev = r[key]; r[key] = val ? 1 : 0; if(val) r.seen = 1;   // sunucu da aynısını yapar
+  const prev = r[key], prevSt = r.stage; r[key] = val ? 1 : 0; if(val) r.seen = 1;   // sunucu da aynısını yapar
+  if(key === 'applied'){ r.stage = val ? (r.stage || 'basvuruldu') : null; if(val && !r.applied_at) r.applied_at = TODAY; }
   if(meta) meta.counts[key] = Math.max(0, (meta.counts[key] || 0) + (val ? 1 : -1));
   buildViews(); render({keep:true}); syncDrawerFlags();
   try{ await post('/api/jobs/' + id, {[key]: !!val}); }
-  catch{ r[key] = prev; render({keep:true}); syncDrawerFlags(); toast('Kaydedilemedi, tekrar dene', {err:true}); return; }
+  catch{ r[key] = prev; r.stage = prevSt; render({keep:true}); syncDrawerFlags(); toast('Kaydedilemedi, tekrar dene', {err:true}); return; }
   refreshCounts();
   if(!quiet && key !== 'starred') toast(FLAG_MSG[key][0](val), {action:{label:'Geri al', fn:() => setFlag(id, key, !val, true)}});
+}
+async function setStage(id, st){
+  const r = byId.get(id); if(!r || !STAGE_MAP[st]) return;
+  const prev = r.stage, prevApp = r.applied;
+  r.stage = st; r.applied = 1; r.seen = 1; if(!r.applied_at) r.applied_at = TODAY;
+  render({keep:true}); syncDrawerFlags();
+  try{ await post('/api/jobs/' + id, {stage:st}); refreshCounts(); }
+  catch{ r.stage = prev; r.applied = prevApp; render({keep:true}); syncDrawerFlags(); toast('Aşama kaydedilemedi', {err:true}); }
 }
 function neighborId(id){
   const ids = rowEls().map(e => +e.dataset.id), i = ids.indexOf(id);
@@ -528,6 +565,8 @@ function fillDrawer(r){
       ${fact('globe', 'Kaynak', `<span class="src${r.source === 'genel' ? ' genel' : ''}">${esc(r.source)}</span>`)}
     </div>
     <div id="dextra"></div>
+    <div class="d-sec" id="dstageWrap" hidden><h4>${icon('check')} Başvuru aşaması <span class="muted" id="dappDate" style="margin-left:auto;text-transform:none;letter-spacing:0"></span></h4>
+      <div class="chips" id="dstage">${Object.entries(STAGE_MAP).map(([k, [l]]) => `<button class="chip" data-dst="${k}">${esc(l)}</button>`).join('')}</div></div>
     <div class="d-sec"><h4>${icon('note')} Notum <span class="save" id="nsave"></span></h4>
       <textarea id="dnote" class="note-ta" rows="3" maxlength="4000" placeholder="Bu ilanla ilgili notların… (ör. İK ile görüştüm, referans iste)"></textarea></div>
     <div class="d-sec"><h4>İlan açıklaması</h4><div id="ddesc"><div class="sk-lines"><i></i><i style="width:92%"></i><i style="width:84%"></i><i style="width:96%"></i><i style="width:58%"></i></div></div></div>
@@ -536,12 +575,18 @@ function fillDrawer(r){
 }
 function syncDrawerFlags(){
   const r = byId.get(dId); if(!r) return;
-  const lv = LEVELS[r.level] || LEVELS['Belirtilmemiş'];
+  const lv = LEVELS[r.level] || LEVELS['Belirtilmemiş'], st = STAGE_MAP[r.stage || 'basvuruldu'] || STAGE_MAP.basvuruldu;
   $('#dpills').innerHTML = `<span class="pill ${lv.cls}">${esc(r.level)}</span>` + (r.region === 'Uzaktan' ? '<span class="pill teal">Uzaktan</span>' : r.region === 'Yurt dışı' ? `<span class="pill na">${icon('globe')}Yurt dışı</span>` : r.region === 'Türkiye' ? '<span class="pill ok">Türkiye</span>' : '')
     + (r.is_new ? '<span class="new" title="Son 3 günde eklendi">YENİ</span>' : '') + (!r.active ? '<span class="pill closed">kapandı</span>' : '')
-    + (r.applied ? `<span class="pill ok">${icon('check')}Başvuruldu</span>` : '') + (r.starred ? `<span class="pill warn">${icon('star')}Favori</span>` : '');
+    + (r.applied ? `<span class="pill ${st[1]}">${icon('check')}${esc(st[0])}</span>` : '') + (r.starred ? `<span class="pill warn">${icon('star')}Favori</span>` : '');
+  const sw = $('#dstageWrap');
+  if(sw){
+    sw.hidden = !r.applied;
+    $('#dappDate').textContent = r.applied_at ? `Başvuru: ${r.applied_at}` : '';
+    $$('#dstage .chip').forEach(b => b.classList.toggle('on', b.dataset.dst === (r.stage || 'basvuruldu')));
+  }
   $('#dstar').classList.toggle('on', !!r.starred); $('#dstar span').textContent = r.starred ? 'Favoride' : 'Favori';
-  $('#dapplied').classList.toggle('on', !!r.applied); $('#dapplied span').textContent = r.applied ? 'Başvuruldu' : 'Başvurdum';
+  $('#dapplied').classList.toggle('on', !!r.applied); $('#dapplied span').textContent = r.applied ? st[0] : 'Başvurdum';
   $('#dhide span').textContent = r.hidden ? 'Göster' : 'Gizle'; $('#dhide .i').innerHTML = `<use href="#i-${r.hidden ? 'eye' : 'eye-off'}"/>`;
   $('#dgo').href = r.url;
 }
@@ -586,14 +631,16 @@ $('#dbody').addEventListener('input', e => {
   if(e.target.id !== 'dnote') return;
   const id = dId, v = e.target.value; $('#nsave').textContent = 'kaydediliyor…'; clearTimeout(noteTimer);
   noteTimer = setTimeout(async () => {
-    try{ await post('/api/jobs/' + id, {note:v}); const r = byId.get(id); const had = !!r?.has_note;
-      if(r){ r.has_note = v.trim() ? 1 : 0; if(had !== !!r.has_note) dirty = true; }
+    try{ await post('/api/jobs/' + id, {note:v}); const r = byId.get(id);
+      if(r){ r.has_note = v.trim() ? 1 : 0; r.note_preview = v.trim().slice(0, 140) || null; dirty = true; }
       if(dId === id && $('#nsave')) $('#nsave').textContent = 'Kaydedildi ✓';
     }catch{ toast('Not kaydedilemedi', {err:true}); }
   }, 600);
 });
 $('#dbody').addEventListener('click', e => {
   if(e.target.id === 'dmore'){ $('#dtext').classList.remove('clamp'); e.target.remove(); }
+  const dst = e.target.closest('[data-dst]')?.dataset.dst;
+  if(dst && dId != null) return setStage(dId, dst);
   const c = e.target.closest('[data-dco]')?.dataset.dco;
   if(c){ const name = byId.get(dId)?.company; closeDrawer(); openCompany(+c, name); }
 });
@@ -611,8 +658,8 @@ function openCompany(id, name){
 $('#btnExport').onclick = () => {
   if(!cur.length) return toast('Dışa aktarılacak ilan yok');
   const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const head = ['Firma', 'İlan', 'Konum', 'Seviye', 'Kaynak', 'İlk görüldü', 'Başvurdum', 'Favori', 'Bağlantı'];
-  const body = cur.map(r => [r.company, r.title, r.location || '', r.level, r.source, r.first_seen, r.applied ? 'evet' : '', r.starred ? 'evet' : '', r.url].map(q).join(';'));
+  const head = ['Firma', 'İlan', 'Konum', 'Seviye', 'Kaynak', 'İlk görüldü', 'Başvurdum', 'Aşama', 'Başvuru tarihi', 'Favori', 'Not', 'Bağlantı'];
+  const body = cur.map(r => [r.company, r.title, r.location || '', r.level, r.source, r.first_seen, r.applied ? 'evet' : '', r.applied ? (STAGE_MAP[r.stage || 'basvuruldu'] || ['Başvuruldu'])[0] : '', r.applied_at || '', r.starred ? 'evet' : '', r.note_preview || '', r.url].map(q).join(';'));
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob(['\ufeff' + [head.map(q).join(';'), ...body].join('\r\n')], {type:'text/csv;charset=utf-8'}));
   a.download = `ilanlar-${TODAY}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 3000);
@@ -645,11 +692,17 @@ function companyRow(c){
     <td><button class="btn sm" data-rs="${c.id}">Yeniden keşfet</button><div class="links"><a href="https://www.kariyer.net/is-ilanlari?kw=${n}" target="_blank" rel="noopener" title="Bu firmayı Kariyer.net'te ara">Kariyer.net ↗</a><a href="https://www.linkedin.com/jobs/search/?keywords=${n}&location=T%C3%BCrkiye" target="_blank" rel="noopener" title="Bu firmanın LinkedIn ilanları">LinkedIn ↗</a></div></td></tr>`;
 }
 async function loadCompanies(){
-  const p = new URLSearchParams(); if($('#cq').value) p.set('q', $('#cq').value); if($('#cstatus').value) p.set('status', $('#cstatus').value);
+  const p = new URLSearchParams();
+  if($('#cq').value) p.set('q', $('#cq').value);
+  if($('#cstatus').value) p.set('status', $('#cstatus').value);
+  if($('#csize')?.value) p.set('size', $('#csize').value);
+  if($('#ccat')?.value) p.set('category', $('#ccat').value);
+  if($('#ccity')?.value) p.set('city', $('#ccity').value);
   const list = await api('/api/companies?' + p);
   $('#ccount').textContent = `${fmt(list.length)} firma`; lazyCo.set(list);
 }
-$('#cq').addEventListener('input', deb(loadCompanies)); $('#cstatus').addEventListener('change', loadCompanies);
+$('#cq').addEventListener('input', deb(loadCompanies));
+for(const s of ['#cstatus', '#csize', '#ccat', '#ccity']) $(s)?.addEventListener('change', loadCompanies);
 $('#cbody').addEventListener('click', async e => {
   const d = e.target.closest('button,a')?.dataset || {}; const b = e.target.closest('button');
   const save = async (body, btn) => { await post('/api/companies/' + (d.sw || d.sk), body); btn.innerHTML = icon('check'); setTimeout(() => btn.textContent = 'Kaydet', 1400); toast('Kaydedildi'); };
@@ -699,9 +752,16 @@ function renderHealth(){
   $('#hbody').innerHTML = list.map(r => `<tr><td><span class="pill ${HLAB[r.level][1]}">${HLAB[r.level][0]}</span></td>
     <td><div class="co-cell">${avatar(r.name, 'sm')}<span class="t">${esc(r.name)}</span></div></td><td><span class="src">${esc(r.source)}</span></td><td>${r.prev_count ?? '–'} → <b>${r.count ?? '–'}</b></td>
     <td class="hide-sm">${r.new ?? 0} / ${r.closed ?? 0}</td><td class="muted">${esc(r.flags.join(' · '))}</td>
-    <td class="muted hide-sm">${esc((r.run_at || '').replace('T', ' ').slice(0, 16))}</td></tr>`).join('') || '<tr><td colspan="7"><div class="empty"><h3>Kayıt yok</h3><p>Henüz kayıt yok, bir tarama çalıştır.</p></div></td></tr>';
+    <td class="muted hide-sm">${esc((r.run_at || '').replace('T', ' ').slice(0, 16))}</td>
+    <td><button class="btn sm" data-hrs="${r.company_id}">Yeniden keşfet</button></td></tr>`).join('') || '<tr><td colspan="8"><div class="empty"><h3>Kayıt yok</h3><p>Henüz kayıt yok, bir tarama çalıştır.</p></div></td></tr>';
 }
 $('#hsum').addEventListener('click', e => { const k = e.target.closest('[data-h]')?.dataset.h; if(!k) return; hfilter = hfilter === k ? '' : k; renderHealth(); });
+$('#hscanBad')?.addEventListener('click', () => startScan('hatali'));
+$('#hbody').addEventListener('click', async e => {
+  const id = e.target.closest('[data-hrs]')?.dataset.hrs; if(!id) return;
+  const r = await post(`/api/companies/${id}/scan`);
+  toast(r.started ? 'Yeniden keşif başladı' : 'Şu an başka bir tarama çalışıyor.', {err:!r.started}); poll();
+});
 
 // ---------------------------------------------------------------- sekmeler
 function show(t){
@@ -734,10 +794,11 @@ async function poll(){
     sawRun = true; finishShown = false; strip.hidden = false; strip.classList.add('run');
     const pct = s.total ? Math.round(100 * s.done / s.total) : 0;
     $('#pspin').hidden = false; $('#pdone').hidden = true; $('#pclose').hidden = true; $('#pbarwrap').hidden = false;
+    $('#pstop').hidden = false; $('#pstop').disabled = !!s.stopping; $('#pstop').textContent = s.stopping ? 'Durduruluyor…' : 'Durdur';
     $('#pbar').style.width = pct + '%'; $('#ppct').textContent = pct + '%'; $('#pphase').textContent = (s.auto ? 'Otomatik tarama · ' : '') + (s.phase || 'Taranıyor');
     $('#ptext').textContent = `${s.done}/${s.total} · ${s.fresh ?? s.new} yeni ilan · ${s.current || ''}`; scanPct = pct; updateTitle();
   } else {
-    strip.classList.remove('run'); scanPct = null; updateTitle();
+    strip.classList.remove('run'); $('#pstop').hidden = true; scanPct = null; updateTitle();
     if(sawRun && s.finished && !finishShown){
       strip.hidden = false; $('#pspin').hidden = true; $('#pdone').hidden = false; $('#pbarwrap').hidden = true; $('#ppct').textContent = ''; $('#pclose').hidden = false;
       const fresh = s.fresh ?? s.new, base = s.new - fresh;   // base: ilk kez taranan kaynaklardan gelenler, "yeni" sayılmaz
@@ -756,6 +817,7 @@ async function poll(){
   wasRunning = run; pollTimer = setTimeout(poll, run ? 1500 : 8000);
 }
 $('#pclose').onclick = () => { finishShown = true; $('#prog').hidden = true; };
+$('#pstop').onclick = async () => { $('#pstop').disabled = true; $('#pstop').textContent = 'Durduruluyor…'; await post('/api/scan/stop'); poll(); };
 async function startScan(mode){
   toggleScanMenu(false);
   if(mode === 'program' && !await ask('Program sayfaları aransın mı?', 'Firmaların sitelerinde genç yetenek, staj ve yeni mezun program sayfaları aranır (son 30 günde bakılanlar atlanır). 20–40 dakika sürebilir; bulunan sayfalar "program" kaynağıyla listelenir ve hızlı taramada yeniden okunur.', 'Evet, başlat')) return;

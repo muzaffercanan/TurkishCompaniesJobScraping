@@ -36,7 +36,16 @@ def _page(url):
     return text(h)[:15000], None, None
 
 
-KINDS = {'workday': _workday, 'smartrecruiters': _smartrecruiters, 'page': _page}
+def _rippling(url):
+    _, _, t = fetch(url, headers={'Accept': 'application/json'}, timeout=20)
+    d = json.loads(t)
+    desc = d.get('description')
+    body = text(' '.join(str(v) for v in desc.values())) if isinstance(desc, dict) else text(str(desc or ''))
+    posted = d.get('createdOn') or None
+    return body[:15000], (posted[:10] if posted else None), None
+
+
+KINDS = {'workday': _workday, 'smartrecruiters': _smartrecruiters, 'rippling': _rippling, 'page': _page}
 
 
 def fetch_detail(kind, url):
@@ -48,4 +57,4 @@ def fetch_detail(kind, url):
 
 
 def pace():
-    time.sleep(0.5)
+    time.sleep(0.25)

@@ -756,5 +756,23 @@ class SummarizeNew(UpsertBase):
         self.assertEqual(scanner._summarize_new(), (0, []))
 
 
+class StopScan(unittest.TestCase):
+    def test_stop_sets_event_only_when_running(self):
+        scanner._stop.clear()
+        scanner.STATE['running'] = False
+        scanner.STATE['stopping'] = False
+        self.assertFalse(scanner.stop())
+        self.assertFalse(scanner._stop.is_set())
+        scanner.STATE['running'] = True
+        try:
+            self.assertTrue(scanner.stop())
+            self.assertTrue(scanner._stop.is_set())
+            self.assertTrue(scanner.STATE['stopping'])
+        finally:
+            scanner._stop.clear()
+            scanner.STATE['running'] = False
+            scanner.STATE['stopping'] = False
+
+
 if __name__ == '__main__':
     unittest.main()

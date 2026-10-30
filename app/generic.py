@@ -10,6 +10,7 @@ import urllib.parse
 from .util import host_of, norm, text
 
 JOB_PATH = re.compile(r'/(job|jobs|ilan|ilanlar|is-ilani|is-ilanlari|position|positions|pozisyon|pozisyonlar|acik-pozisyon(lar)?|'
+                      r'open-position(s)?|job-opening(s)?|career-opportunit(y|ies)|acik-ilan(lar)?|is-firsat(i|lari)|'
                       r'vacanc(y|ies)|opening|openings|career|careers|kariyer|kariyer-firsatlari|o|j|posting|postings|requisition|'
                       r'job-detail|jobdetail|is-ilan|isilani|'
                       # ekli klasor adlari: pozisyon-detayi, ilan-detay, job-details, staj-detayi, kariyer-detay, position-detail ...
@@ -21,7 +22,7 @@ BOARD_JOB_LINK = re.compile(r'linkedin\.com/jobs/view/\d+|kariyer\.net/is-ilani/
 JOB_FILE = re.compile(r'\.job$|jobid=|job_id=|ilanid=|ilan_id=|positionid=|reqid=|jobreq', re.I)
 ATS_HOST = re.compile(r'lever\.co|greenhouse\.io|ashbyhq|workable|smartrecruiters|recruitee|personio|bamboohr|breezy\.hr|pinpointhq|'
                       r'teamtailor|myworkdayjobs|successfactors|comeet|icims|jobvite|join\.com|homerun|careers-page|zohorecruit|'
-                      r'freshteam|applytojob|oraclecloud|kolayik|peoplise', re.I)
+                      r'freshteam|applytojob|oraclecloud|kolayik|peoplise|rippling\.com|peoplebox\.biz|hrpeak\.com', re.I)
 # Ingilizce unvanlar tam kelime; Turkce unvanlar ek alabilir ama "Sorumluluk", "Liderlik" gibi kavramlar haric
 TITLE_WORDS = re.compile(
     r'\b(engineer|developer|specialist|analyst|designer|manager|lead|intern|internship|trainee|assistant|consultant|'
@@ -40,8 +41,8 @@ NAV = re.compile(r'^(ana ?sayfa|home|hakkımızda|about|iletişim|contact|blog|h
                  r'bize katıl|join us|insan kaynakları|genel başvuru|general application|başvuru formu|faq|sss|english|türkçe|en|tr)$', re.I)
 LISTING_TITLE = re.compile(r'ilanlar|ilanları|ilanlari|pozisyonlar|positions$|jobs$|kariyer fırsat|career opportunit|tüm |all |'
                            r'^video\b|\d{1,2}:\d{2}$|internships$|programs$|programlar|^apply now|^learn more|^read more|^watch', re.I)
-GENERIC_LINK = re.compile(r'^(detay(lar)?|incele|başvur|basvur|hemen başvur|apply( now)?|view( job)?|see details|details|devam|'
-                          r'more|daha fazla|ilanı gör|ilani gor|görüntüle|goruntule|>|→|»)$', re.I)
+GENERIC_LINK = re.compile(r'^(detay(lar)?|incele|başvur|basvur|hemen başvur|başvuru için tıklay(ın|ınız)|basvuru icin tiklay(in|iniz)|'
+                          r'apply( now)?|view( job)?|see details|details|devam|more|daha fazla|ilanı gör|ilani gor|görüntüle|goruntule|>|→|»)$', re.I)
 SKIP_HREF = re.compile(r'^(mailto:|tel:|javascript:|#)|facebook|twitter|instagram|linkedin|youtube|x\.com/|wa\.me|kariyer\.net|'
                        r'\.(pdf|jpg|png|docx?)$', re.I)
 

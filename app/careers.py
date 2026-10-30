@@ -12,7 +12,9 @@ from .util import HttpError, fetch, host_of, text
 CAREER_RX = re.compile(r'kariyer|career|jobs?\b|/jobs|is-ilan|iş ilan|açık pozisyon|acik-pozisyon|open positions|insan kaynak|'
                        r'insan-kaynak|human resources|join[- ]?us|bize katıl|ekibimize katıl|work[- ]with[- ]us|hiring|vacanc|we.?re hiring',
                        re.I)
-BAD_RX = re.compile(r'facebook|twitter|instagram|youtube|x\.com/|wa\.me|mailto:|tel:|\.pdf$|blog|haber|news|kvkk|privacy|cookie', re.I)
+BAD_RX = re.compile(r'facebook|twitter|instagram|youtube|x\.com/|wa\.me|mailto:|tel:|\.pdf$|blog|haber|news|kvkk|privacy|cookie|'
+                    r'/404\b|checkloading|/(kategori|category|urun|urunler|product|products|cozum|cozumler|cozumlerimiz|solutions|shop|magaza|oyun|duyuru|duyurular|basin|press)(-|$|/)', re.I)
+SUB_LIST_RX = re.compile(r'open-?positions|acik-?pozisyon|is-?ilan|tum-?ilan|we-?are-?hiring|kariyer-?firsat|job-?openings|all-?jobs', re.I)
 COMMON_PATHS = ('/kariyer', '/careers', '/tr/kariyer', '/insan-kaynaklari', '/acik-pozisyonlar', '/jobs')
 
 
@@ -82,13 +84,17 @@ def discover(c):
         res.update(ats=det[0], ats_slug=det[1], ats_extra=det[2], status='ats', status_note='ana sayfada ATS baglantisi')
         return res
     # kariyer baglantisi adaylari
-    cands = {}
+    cands, redirect_det = {}, None
     for href, label, *_ in links:
         if not href.startswith('http') or BAD_RX.search(href):
             continue
         if CAREER_RX.search(href) or CAREER_RX.search(label or ''):
             h = host_of(href)
-            if h == base or h.endswith('.' + base) or base.endswith('.' + h) or atsmod.detect(href):
+            dl = atsmod.detect(href)
+            if dl and dl[0] in atsmod.REDIRECT_ONLY and not (h == base or h.endswith('.' + base) or base.endswith('.' + h)):
+                redirect_det = redirect_det or dl
+                continue
+            if h == base or h.endswith('.' + base) or base.endswith('.' + h) or dl:
                 cands[href.split('#')[0]] = max(cands.get(href.split('#')[0], -1e9), _score(href, label or ''))
     order = sorted(cands, key=lambda u: -cands[u])[:2]
     if not order:  # yaygin adresleri dene
@@ -123,10 +129,15 @@ def discover(c):
                 except HttpError:
                     continue
     if not order:
+        if redirect_det:
+            res.update(career_url=final, ats='generic', ats_extra=redirect_det[0], status='yonlendirme',
+                       status_note=f'ilanlari {redirect_det[0]} uzerinde yayinliyor ({redirect_det[1]})')
+            return res
         mail = re.search(r'mailto:([A-Za-z0-9._%+-]*(?:ik|hr|kariyer|career|insan|cv|jobs|basvuru)[A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+)', html, re.I)
         res.update(status='kariyer-yok', status_note=('yalnizca e-posta: ' + mail.group(1)) if mail else 'kariyer sayfasi bulunamadi')
         return res
-    redirect_note, robots_blocked, opened = None, False, False
+    redirect_note = f'ilanlari {redirect_det[0]} uzerinde yayinliyor ({redirect_det[1]})' if redirect_det else None
+    robots_blocked, opened = False, False
     for cu in order:
         try:
             f2, h2, l2, fr2, via2 = _page(cu)
@@ -158,9 +169,22 @@ def discover(c):
                 note += f' ({det[0]} kullaniyor, okuyucusu yok)'
             res.update(career_url=f2, ats='generic', ats_extra=det[0] if det else None, status='genel', status_note=note, jobs=jobs)
             return res
+        if len(order) < 4:  # kariyer tanitim sayfasindan asil ilan listesi alt sayfasina gecis (or. /jobs -> /open-positions)
+            subs = {}
+            for shref, slabel, *_ in l2:
+                sh = shref.split('#')[0]
+                if not sh.startswith('http') or sh in order or sh == f2.split('#')[0] or BAD_RX.search(sh):
+                    continue
+                shost = host_of(sh)
+                if not (shost == base or shost.endswith('.' + base) or base.endswith('.' + shost)):
+                    continue
+                if SUB_LIST_RX.search(sh) or SUB_LIST_RX.search(slabel or '') or (shost != host_of(f2) and shost.startswith(('kariyer.', 'career.', 'jobs.'))):
+                    subs[sh] = max(subs.get(sh, -1e9), _score(sh, slabel or ''))
+            if subs:
+                order.append(max(subs, key=subs.get))
         if det and det[0] in atsmod.REDIRECT_ONLY:
             redirect_note = f'ilanlari {det[0]} uzerinde yayinliyor ({det[1]})'
-        res.update(career_url=f2, ats='generic', ats_extra=det[0] if det else None)
+        res.update(career_url=f2, ats='generic', ats_extra=det[0] if det else (redirect_det[0] if redirect_det else None))
     if redirect_note:
         res.update(status='yonlendirme', status_note=redirect_note)
     elif robots_blocked and not opened:

@@ -134,14 +134,27 @@ def jobs():
     if a.get('company_id'):
         where.append('j.company_id=?')
         args.append(int(a['company_id']))
-    # Ayni firmanin ilanlari her zaman alt alta; firmalar buyukten kucuge (Buyuk > Orta > Kucuk > Bilinmiyor,
-    # ayni buyuklukte aktif ilani cok olan once). 'Sirala' secimi firma icindeki ilan sirasidir.
-    inner = {'new': 'j.first_seen DESC, j.id DESC', 'title': 'trn(j.title), j.id',
-             'posted': 'COALESCE(j.posted, j.first_seen) DESC'}.get(a.get('sort'), 'j.first_seen DESC, j.id DESC')
-    order = f'{SIZE_RANK}, c.job_count DESC, trn(c.name), c.id, {inner}'
+    if a.get('max_exp') and str(a.get('max_exp')).isdigit():
+        where.append('(j.exp_min IS NULL OR j.exp_min<=?)')
+        args.append(int(a['max_exp']))
+    if a.get('stage'):
+        where.append('j.stage=?')
+        args.append(a['stage'])
+    # Siralama: varsayilan olarak firmalar buyukten kucuge ve ayni firmanin ilanlari alt alta;
+    # 'global_new' / 'global_posted' secildiginde ise tum ilanlar firma ayrimi olmadan tarih sirasiyla dizilir.
+    srt = a.get('sort')
+    if srt == 'global_new':
+        order = f'j.first_seen DESC, COALESCE(j.posted, j.first_seen) DESC, {SIZE_RANK}, j.id DESC'
+    elif srt == 'global_posted':
+        order = f'COALESCE(j.posted, j.first_seen) DESC, j.first_seen DESC, {SIZE_RANK}, j.id DESC'
+    else:
+        inner = {'new': 'j.first_seen DESC, j.id DESC', 'title': 'trn(j.title), j.id',
+                 'posted': 'COALESCE(j.posted, j.first_seen) DESC'}.get(srt, 'j.first_seen DESC, j.id DESC')
+        order = f'{SIZE_RANK}, c.job_count DESC, trn(c.name), c.id, {inner}'
     cut = _cutoff(NEW_DAYS)
     rows = g.con.execute(f'''SELECT j.id, j.company_id, j.source, j.title, j.location, j.team, j.url, j.posted, j.first_seen, j.last_seen,
                            j.active, j.level, j.is_tech, j.applied, j.hidden, j.starred, j.seen, j.region, j.exp_min,
+                           j.stage, j.applied_at, SUBSTR(j.note, 1, 140) AS note_preview,
                            (j.note IS NOT NULL AND j.note!='') AS has_note, {RECENT} AS is_new,
                            c.name AS company, c.category, c.city AS company_city, c.size, c.website
                            FROM jobs j JOIN companies c ON c.id=j.company_id WHERE {" AND ".join(where)}
@@ -153,21 +166,36 @@ def jobs():
 def job_detail(jid):
     """Tek ilanin tum alanlari (aciklama ve not dahil); liste ucu bunlari tasimaz."""
     r = g.con.execute('''SELECT j.id, j.company_id, j.source, j.title, j.location, j.team, j.url, j.posted, j.first_seen, j.last_seen,
-                         j.active, j.level, j.applied, j.hidden, j.starred, j.region, j.exp_min, j.description, j.note,
+                         j.active, j.level, j.applied, j.hidden, j.starred, j.region, j.exp_min, j.description, j.note, j.stage, j.applied_at,
                          c.name AS company, c.category, c.city AS company_city, c.size, c.website, c.career_url
                          FROM jobs j JOIN companies c ON c.id=j.company_id WHERE j.id=?''', (jid,)).fetchone()
     return (jsonify(dict(r)) if r else (jsonify(error='bulunamadi'), 404))
 
 
+STAGES = ('basvuruldu', 'ik', 'teknik', 'teklif', 'red')
+
+
 @app.post('/api/jobs/<int:jid>')
 def job_update(jid):
     d = request.get_json(force=True)
+    today = dt.date.today().isoformat()
     for f in ('applied', 'hidden', 'starred', 'seen'):
         if f in d:
             db.write(g.con, f'UPDATE jobs SET {f}=? WHERE id=?', (1 if d[f] else 0, jid))
+    if 'applied' in d:
+        if d['applied']:
+            db.write(g.con, "UPDATE jobs SET stage=COALESCE(stage, 'basvuruldu'), applied_at=COALESCE(applied_at, ?) WHERE id=?", (today, jid))
+        else:
+            db.write(g.con, 'UPDATE jobs SET stage=NULL WHERE id=?', (jid,))
+    if 'stage' in d:
+        st = d['stage'] if d['stage'] in STAGES else None
+        if st:
+            db.write(g.con, 'UPDATE jobs SET stage=?, applied=1, applied_at=COALESCE(applied_at, ?) WHERE id=?', (st, today, jid))
+        else:
+            db.write(g.con, 'UPDATE jobs SET stage=NULL, applied=0 WHERE id=?', (jid,))
     if 'note' in d:
         db.write(g.con, 'UPDATE jobs SET note=? WHERE id=?', ((d['note'] or '').strip()[:4000] or None, jid))
-    if 'seen' not in d and (any(d.get(f) for f in ('applied', 'hidden', 'starred')) or (d.get('note') or '').strip()):
+    if 'seen' not in d and (any(d.get(f) for f in ('applied', 'hidden', 'starred', 'stage')) or (d.get('note') or '').strip()):
         db.write(g.con, 'UPDATE jobs SET seen=1 WHERE id=?', (jid,))  # uzerinde islem yapilan ilan gorulmus sayilir
     return jsonify(ok=True)
 
@@ -189,14 +217,18 @@ def companies():
     a = request.args
     where, args = ['1=1'], []
     if a.get('q'):
-        cl, ar = db.search_clauses(a['q'], ['name', 'website'])
+        cl, ar = db.search_clauses(a['q'], ['name', 'website', 'career_url', 'category', 'city'])
         where += cl
         args += ar
     if a.get('status'):
         where.append("COALESCE(status,'taranmadi')=?")
         args.append(a['status'])
+    for k in ('size', 'category', 'city'):
+        if a.get(k):
+            where.append(f'{k}=?')
+            args.append(a[k])
     rows = g.con.execute(f'''SELECT * FROM companies WHERE {" AND ".join(where)}
-                           ORDER BY job_count DESC, trn(name) LIMIT 3000''', args).fetchall()
+                           ORDER BY job_count DESC, {SIZE_RANK.replace("c.", "")}, trn(name) LIMIT 3000''', args).fetchall()
     return jsonify([dict(r) for r in rows])
 
 
@@ -267,7 +299,12 @@ def scan():
     mode = (request.get_json(silent=True) or {}).get('mode', 'hizli')
     if mode == 'site' and not (search.load_config().get('brave_api_key') or '').strip():
         return jsonify(started=False, error='Önce Firmalar sekmesinden arama API anahtarını gir.')
-    return jsonify(started=scanner.start(mode if mode in ('hizli', 'tam', 'yeni', 'site', 'program') else 'hizli'))
+    return jsonify(started=scanner.start(mode if mode in ('hizli', 'tam', 'yeni', 'site', 'program', 'hatali') else 'hizli'))
+
+
+@app.post('/api/scan/stop')
+def scan_stop():
+    return jsonify(stopped=scanner.stop())
 
 
 @app.get('/api/auto')

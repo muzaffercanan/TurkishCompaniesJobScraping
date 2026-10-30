@@ -84,6 +84,7 @@
       <div class="menu" id="scanMenu" role="menu" hidden>
         <button role="menuitem" data-mode="hizli"><b>Hızlı tara</b><span>Bilinen ATS'ler ve özel okuyucular · birkaç dakika</span></button>
         <button role="menuitem" data-mode="yeni"><b>Yeni eklenenleri tara</b><span>Excel'e sonradan eklenen, henüz hiç taranmamış firmalar</span></button>
+        <button role="menuitem" data-mode="hatali"><b>Sorunlu kaynakları yeniden tara</b><span>Son taramada hata veren veya bozulan kaynaklar</span></button>
         <button role="menuitem" data-mode="program"><b>Genç yetenek / staj programlarını bul</b><span>Firmaların kendi sitelerindeki program sayfaları · 20–40 dk</span></button>
         <button role="menuitem" data-mode="tam"><b>Tam tara</b><span>Tüm kariyer sayfaları, gerçek tarayıcıyla · 30–90 dk</span></button>
       </div>
@@ -98,6 +99,7 @@
     <div class="strip-text"><b id="pphase"></b><span id="ptext"></span></div>
     <div class="bar" id="pbarwrap"><i id="pbar"></i></div>
     <span class="pct" id="ppct"></span>
+    <button class="btn sm" id="pstop" hidden>Durdur</button>
     <button class="icon-btn sm" id="pclose" aria-label="Kapat" hidden><svg class="i"><use href="#i-x"/></svg></button>
   </div>
 </div>
@@ -116,7 +118,7 @@
     <div class="toolbar" id="toolbar">
       <div class="search">
         <svg class="i"><use href="#i-search"/></svg>
-        <input type="search" id="q" placeholder="İlan, firma, konum ara…  (ör. backend, junior, Ankara)" autocomplete="off" spellcheck="false">
+        <input type="search" id="q" placeholder="İlan, firma, konum ara…  (ör. backend -senior, junior, Ankara)" autocomplete="off" spellcheck="false">
         <button class="clear" id="qclear" aria-label="Aramayı temizle" hidden><svg class="i"><use href="#i-x"/></svg></button>
         <kbd id="qkbd">/</kbd>
       </div>
@@ -130,6 +132,9 @@
             <label class="field"><span>Firmanın şehri</span><select id="city"><option value="">Tüm şehirler</option></select></label>
             <label class="field"><span>Firma büyüklüğü</span><select id="size"><option value="">Tüm büyüklükler</option></select></label>
             <label class="field"><span>Kaynak</span><select id="source"><option value="">Tüm kaynaklar</option></select></label>
+            <label class="field"><span>Deneyim sınırı</span><select id="maxExp"><option value="">Tüm deneyim düzeyleri</option>
+              <option value="1">En fazla 1 yıl (veya belirtilmemiş)</option><option value="2">En fazla 2 yıl</option>
+              <option value="3">En fazla 3 yıl</option><option value="5">En fazla 5 yıl</option></select></label>
           </div>
           <div class="pop-toggles">
             <label class="switch"><input type="checkbox" id="tech"><i></i><span>Sadece yazılım / teknik ilanlar</span></label>
@@ -140,8 +145,9 @@
           <div class="pop-foot"><button class="btn ghost" id="fclear">Filtreleri sıfırla</button><button class="btn primary" id="fdone">Tamam</button></div>
         </div>
       </div>
-      <label class="sortsel" title="Firmalar her zaman büyükten küçüğe sıralanır; bu seçim firma içindeki ilan sırasıdır"><span>Firma içinde</span><select id="sort">
-        <option value="new">En yeni eklenen</option><option value="posted">Yayın tarihi</option><option value="title">Başlık (A–Z)</option></select></label>
+      <label class="sortsel" title="Firma gruplu sıralama ya da tüm ilanlar arasında tarih sıralaması"><span>Sırala</span><select id="sort">
+        <option value="new">Firma içinde: En yeni</option><option value="posted">Firma içinde: Yayın tarihi</option><option value="title">Firma içinde: Başlık (A–Z)</option>
+        <option value="global_new">Tüm ilanlar: En yeni eklenen</option><option value="global_posted">Tüm ilanlar: Yayın tarihi</option></select></label>
       <div class="seg" id="viewmode" role="group" aria-label="Görünüm">
         <button data-g="0" title="Düz liste (g)"><svg class="i"><use href="#i-list"/></svg><span>Liste</span></button>
         <button data-g="1" title="Firmaya göre grupla (g)"><svg class="i"><use href="#i-layers"/></svg><span>Firmaya göre</span></button>
@@ -168,6 +174,16 @@
       <div class="seg sm" id="daychips" role="group" aria-label="Eklenme zamanı"></div>
     </div>
 
+    <div class="qf" id="kwbar">
+      <span class="lab">Hızlı arama</span>
+      <div class="chips" id="kwchips"></div>
+    </div>
+
+    <div class="qf" id="stagebar" hidden>
+      <span class="lab">Başvuru aşaması</span>
+      <div class="chips" id="stages"></div>
+    </div>
+
     <div class="active" id="active" hidden></div>
 
     <div id="jlist" class="list" aria-live="polite"></div>
@@ -188,7 +204,10 @@
       <p class="muted">Anahtar: <a href="https://brave.com/search/api/" target="_blank" rel="noopener">brave.com/search/api</a> (aylık ücretsiz kredi; kart gerekir). Yalnızca bu bilgisayarda saklanır.</p>
     </details>
     <div class="toolbar plain">
-      <div class="search"><svg class="i"><use href="#i-search"/></svg><input type="search" id="cq" placeholder="Firma ya da site ara…" autocomplete="off"></div>
+      <div class="search"><svg class="i"><use href="#i-search"/></svg><input type="search" id="cq" placeholder="Firma, şehir, kategori ya da site ara…" autocomplete="off"></div>
+      <select id="csize"><option value="">Tüm büyüklükler</option></select>
+      <select id="ccat"><option value="">Tüm kategoriler</option></select>
+      <select id="ccity"><option value="">Tüm şehirler</option></select>
       <select id="cstatus"><option value="">Tüm durumlar</option></select>
       <span class="count" id="ccount"></span>
     </div>
@@ -213,9 +232,9 @@
 
   <!-- ============================== SAĞLIK ============================== -->
   <section id="tab-health" hidden>
-    <div class="note"><svg class="i"><use href="#i-activity"/></svg><div>Her kaynağın son taraması. <b>Uyarı</b>: ilan sayısı birden düştü ya da ilanların çoğu bir anda değişti (okuyucu bozulmuş olabilir). <b>Hata</b>: kaynak okunamadı. Bu firmalarda Firmalar sekmesinden <b>Yeniden keşfet</b> dene.</div></div>
+    <div class="note"><svg class="i"><use href="#i-activity"/></svg><div class="grow">Her kaynağın son taraması. <b>Uyarı</b>: ilan sayısı birden düştü ya da ilanların çoğu bir anda değişti (okuyucu bozulmuş olabilir). <b>Hata</b>: kaynak okunamadı.</div><button class="btn sm primary" id="hscanBad"><svg class="i"><use href="#i-zap"/></svg>Sorunlu kaynakları yeniden tara</button></div>
     <div class="kpis three" id="hsum"></div>
-    <div class="tblwrap"><table class="tbl"><thead><tr><th>Durum</th><th>Firma</th><th>Kaynak</th><th>İlan (önceki → şimdi)</th><th class="hide-sm">Yeni / kapanan</th><th>Not</th><th class="hide-sm">Son tarama</th></tr></thead>
+    <div class="tblwrap"><table class="tbl"><thead><tr><th>Durum</th><th>Firma</th><th>Kaynak</th><th>İlan (önceki → şimdi)</th><th class="hide-sm">Yeni / kapanan</th><th>Not</th><th class="hide-sm">Son tarama</th><th></th></tr></thead>
       <tbody id="hbody"></tbody></table></div>
   </section>
 
