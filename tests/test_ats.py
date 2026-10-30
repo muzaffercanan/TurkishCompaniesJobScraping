@@ -147,5 +147,52 @@ class RipplingAndCustomDomainAts(unittest.TestCase):
         self.assertEqual(det, ('successfactors', 'yasar', 'career.yasar.com.tr'))
 
 
+class NewPlatforms(unittest.TestCase):
+    """Cok uluslu firmalarin kariyer platformlari: tespit ve Turkiye filtresi."""
+
+    def test_detect(self):
+        cases = {
+            'https://careers.dhl.com/global/en/search-results <script src="https://cdn.phenompeople.com/a.js"></script>':
+                ('phenom', 'careers.dhl.com', 'en_global'),
+            'https://jobs.citi.com/location/x <img src="//tbcdn.talentbrew.com/company/287/cms/a.webp">': ('talentbrew', 'jobs.citi.com', '287'),
+            'https://jobs.vodafone.com/careers <script src="https://static.vscdn.net/a.js"></script> /api/pcsx/search?domain=vodafone.com':
+                ('eightfold', 'jobs.vodafone.com', 'vodafone.com'),
+            'https://kariyer.firma.com/ <link href="https://cdn.talentics.app/x/favicon">': ('talentics', 'kariyer', 'kariyer.firma.com'),
+            'https://firma.com/kariyer <a href="https://firma.talentics.app/">Ilanlar</a>': ('talentics', 'firma', None),
+            'https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs': ('oracle', 'CX_1001', 'jpmc.fa.oraclecloud.com'),
+        }
+        for blob, want in cases.items():
+            self.assertEqual(ats.detect(blob), want, blob)
+            self.assertTrue(ats.has_reader(want[0], want[2]), want)
+
+    def test_eightfold_drops_fuzzy_non_turkey_matches(self):
+        page = {'data': {'count': 2, 'positions': [
+            {'id': 1, 'name': 'Backend Engineer', 'locations': ['Budapest, HUN', 'Sincan Ankara, TUR, 06930'], 'positionUrl': '/careers/job/1'},
+            {'id': 2, 'name': 'Sales', 'locations': ['Budapest, HUN'], 'standardizedLocations': ['Budapest, HU']}]}}
+        with mock.patch.object(ats, 'fetch_json', return_value=page):
+            jobs = ats.eightfold('jobs.ornek.com', 'ornek.com')
+        self.assertEqual([j['title'] for j in jobs], ['Backend Engineer'])
+        self.assertTrue(jobs[0]['location'].startswith('Sincan Ankara'))  # Turkiye konumu basta: bolge Turkiye olur
+        self.assertTrue(jobs.confirmed)
+
+    def test_phenom_without_turkey_is_confirmed_empty(self):
+        first = {'totalHits': 50, 'data': {'aggregations': [{'field': 'country', 'value': {'Germany': 40, 'Turkey': 0}}]}}
+        with mock.patch.object(ats, '_ph_search', return_value=first) as ps:
+            jobs = ats.phenom('careers.ornek.com', 'en_global')
+        self.assertEqual((list(jobs), jobs.confirmed), ([], True))
+        ps.assert_called_once()
+
+    def test_oracle_without_turkey_location_is_confirmed_empty(self):
+        with mock.patch.object(ats, 'fetch_json', return_value={'items': [{'Id': '1', 'Level': 3, 'Country': 'United States', 'Name': 'Turkey, TX'}]}):
+            jobs = ats.oracle('CX_1', 'x.oraclecloud.com')
+        self.assertEqual((list(jobs), jobs.confirmed), ([], True))
+
+    def test_workday_location_facet_filter(self):
+        facets = [{'facetParameter': 'locationMainGroup', 'values': [{'facetParameter': 'locations', 'values': [
+            {'descriptor': 'Besiktas, Istanbul Turkey', 'id': 'a', 'count': 17}, {'descriptor': 'Madrid, Spain', 'id': 'b', 'count': 30}]}]}]
+        self.assertIsNone(ats._wd_country(facets))
+        self.assertEqual(ats._wd_places(facets), ('locations', ['a'], 47))
+
+
 if __name__ == '__main__':
     unittest.main()

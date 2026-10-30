@@ -16,8 +16,8 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 from . import ats as atsmod
-from . import browser, careers, custom, db, enrich, generic, programs, seniority
-from .util import HttpError, host_of, log, norm
+from . import agg, browser, careers, custom, db, enrich, generic, programs, seniority
+from .util import TR_PLACE, HttpError, host_of, log, norm
 
 # Is ilani siteleri: kendi sitelerinde baska sirketlerin ilanlarini yayinliyorlar ve otomatik toplamaya izin vermiyorlar.
 # Bu firmalar listede olsa bile kariyer sayfalari taranmaz (Arama kisayollari sekmesinden acilir).
@@ -62,8 +62,7 @@ TECH = re.compile(r'software|yazilim|developer|gelistirici|backend|back-end|fron
                   r'sistem|system|bilisim|dijital|digital')
 
 
-TR_LOC = re.compile(r'turk|turkiye|istanbul|ankara|izmir|kocaeli|gebze|bursa|antalya|eskisehir|konya|adana|mersin|kayseri|'
-                    r'sakarya|maslak|levent|kadikoy|atasehir|sariyer|besiktas|sisli|umraniye|kucukyali|pendik|tuzla|cankaya|odtu|bilkent')
+TR_LOC = TR_PLACE  # util.TR_PLACE: ATS okuyuculari da (Workday konum filtresi) ayni kalibi kullanir
 REMOTE = re.compile(r'remote|uzaktan|anywhere|hybrid|hibrit|work from home')
 
 
@@ -111,6 +110,7 @@ def upsert(con, company_id, source, jobs, definitive=True, guard=True):
             baseline = 1
             name = (db.tl().execute('SELECT name FROM companies WHERE id=?', (company_id,)).fetchone() or ['?'])[0]
             _log(f"{name}: {source} kaynagindan {n_new} yeni ilan birden geldi (onceki aktif {len(prev_ids)}): ilk tam okuma sayildi, 'yeni' isaretlenmeyecek")
+    hide = int(bool((db.tl().execute('SELECT hide_jobs FROM companies WHERE id=?', (company_id,)).fetchone() or [0])[0]))
     ids, new_rows = set(), []
     for j in jobs:
         ext = str(j.get('id') or j.get('url'))[:500]
@@ -135,9 +135,10 @@ def upsert(con, company_id, source, jobs, definitive=True, guard=True):
                       desc[:6000] or None, exp, dkind, durl, row['id']))
         else:
             cur = db.write(db.tl(), 'INSERT INTO jobs(company_id,source,ext_id,title,location,team,url,posted,first_seen,last_seen,active,'
-                                    'level,is_tech,region,description,exp_min,detail_kind,detail_url,is_baseline) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)',
+                                    'level,is_tech,region,description,exp_min,detail_kind,detail_url,is_baseline,hidden) '
+                                    'VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)',
                            (company_id, source, ext, j['title'], j.get('location', ''), j.get('team', ''), j.get('url', ''),
-                            j.get('posted'), now, now, level, tech, region, desc[:6000] or None, exp, dkind, durl, baseline))
+                            j.get('posted'), now, now, level, tech, region, desc[:6000] or None, exp, dkind, durl, baseline, hide))
             new += 1
             _NEW_IDS.append(cur.lastrowid)
             if not baseline:
@@ -242,11 +243,20 @@ def _robots_block(con, c, source):
         _log(f'{c["name"]}: robots.txt izin vermiyor, {source} kaynagindaki {len(rows)} ilan kapatildi')
 
 
+def tr_only(jobs):
+    """Cok uluslu firma kaynagi: yalnizca Turkiye'deki ilanlar. Kaynak ilan dondurduyse liste dogrulanmistir (Turkiye'de ilan
+    kalmadiysa eskiler kapanir); kaynak bos donduyse okuyucunun kendi karari gecerli."""
+    kept = [j for j in jobs if region_of(j.get('location', ''), j.get('remote')) == 'Türkiye']
+    note = getattr(jobs, 'note', '') or (f'Turkiye filtresi: {len(kept)} / {len(jobs)} ilan' if len(kept) != len(jobs) else '')
+    return atsmod.Jobs(kept, note=note, confirmed=bool(jobs) or getattr(jobs, 'confirmed', False))
+
+
 def _fetch_known(c):
     """ATS veya firmaya ozel okuyucu: (source, jobs)"""
     if c['ats'] == 'custom':
         return 'ozel', custom.REGISTRY[c['ats_slug']]()
-    return c['ats'], atsmod.fetch_jobs(c['ats'], c['ats_slug'], c['ats_extra'])
+    jobs = atsmod.fetch_jobs(c['ats'], c['ats_slug'], c['ats_extra'])
+    return c['ats'], (tr_only(jobs) if c.get('tr_only') else jobs)
 
 
 def scan_known(con, c):
@@ -354,6 +364,132 @@ def scan_discover(con, c, force=False):
         _record_run(c, 'genel', False, error=str(e)[:200])
         _finish_company(con, c, 'hata', f'kesif/tarama hatasi: {str(e)[:150]}', c['job_count'] or 0)
         _log(f'{c["name"]}: HATA {str(e)[:100]}')
+
+
+AGG_SOURCE = 'workable-tr'
+AGG_CATEGORY = 'İş platformundan eklenen'
+
+
+def _new_company(name, website, city, ats, slug, extra=None, source='platform'):
+    cur = db.write(db.tl(), 'INSERT INTO companies(name, category, city, website, website_source, ats, ats_slug, ats_extra, tr_only, checked_at) '
+                            'VALUES(?,?,?,?,?,?,?,?,1,?)',
+                   (name, AGG_CATEGORY, city or 'Belirtilmemiş', website or None, source if website else None, ats, slug, extra,
+                    dt.datetime.now().isoformat(timespec='minutes')))
+    return cur.lastrowid
+
+
+def _city(location):
+    first = (location or '').split(',')[0].strip()
+    country_only = re.match(r'(turkiye|turkey|tuerkiye)$', norm(first))
+    return first if first and TR_PLACE.search(norm(first)) and not country_only else 'Belirtilmemiş'
+
+
+def _own_source(row):
+    """Firmanin ilanlari zaten kendi kaynagindan geliyor mu (ATS / ozel okuyucu / ilan bulan genel ayristirici)?"""
+    return row['ats'] not in (None, 'generic', 'agg') or (row['ats'] == 'generic' and row['status'] == 'genel')
+
+
+def scan_aggregators(con):
+    """Workable genel aramasindaki Turkiye ilanlari firmalara dagitilir (kaynak 'workable-tr'). Listede olmayan firma yalnizca
+    en az bir teknik ilani varsa eklenir. Kendi kaynagi olan firmanin ilanlari zaten oradan geldigi icin alinmaz (cift kayit)."""
+    STATE.update(phase='iş platformu araması (Workable, Türkiye)')
+    try:
+        jobs = agg.workable_turkey()
+    except Exception as e:  # noqa: BLE001
+        log.warning('workable aramasi okunamadi', exc_info=True)
+        _log(f'Workable aramasi okunamadi: {str(e)[:100]}')
+        return
+    if not jobs:  # arama bozulmus olabilir: hicbir firmanin ilani kapatilmaz
+        _log('Workable aramasi bos dondu; firmalara dokunulmadi')
+        return
+    groups = collections.OrderedDict()
+    for j in jobs:
+        groups.setdefault(j['company']['key'], []).append(j)
+    index = agg.company_index(db.tl())
+    used, added = set(), 0
+    for js in groups.values():
+        if _stop.is_set():
+            return
+        co = js[0]['company']
+        row = agg.match(co, index)
+        if row is not None:
+            if _own_source(row):
+                continue
+            cid = row['id']
+            if row['ats'] != 'agg':
+                db.write(db.tl(), "UPDATE companies SET ats='agg', ats_slug=?, tr_only=1 WHERE id=?", (AGG_SOURCE, cid))
+        else:
+            if not co['name'] or not any(agg.is_software(j['title']) for j in js):
+                continue
+            cid = _new_company(co['name'], co['website'], _city(js[0]['location']), 'agg', AGG_SOURCE, source='workable')
+            added += 1
+            index[1][agg._key(co['name'])] = dict(id=cid, ats='agg', status=None)
+        used.add(cid)
+        c = dict(db.tl().execute('SELECT * FROM companies WHERE id=?', (cid,)).fetchone())
+        items = [{k: v for k, v in j.items() if k != 'company'} for j in js]
+        new, closed, prev, overlap, new_rows = upsert(con, cid, AGG_SOURCE, items, guard=False)
+        _check_health(c, AGG_SOURCE, prev, len(items), overlap, new_rows)
+        _record_run(c, AGG_SOURCE, True, len(items), new, closed, prev, overlap)
+        active = db.tl().execute('SELECT COUNT(*) FROM jobs WHERE company_id=? AND active=1', (cid,)).fetchone()[0]
+        _finish_company(con, c, 'ats', f'Workable aramasi (Turkiye): {len(items)} ilan', active)
+        STATE['new'] += new
+        STATE['closed'] += closed
+        if new:
+            _log(f'{c["name"]}: {new} yeni ilan (Workable aramasi)')
+    for r in db.tl().execute("SELECT * FROM companies WHERE ats='agg' AND ats_slug=?", (AGG_SOURCE,)).fetchall():
+        if r['id'] not in used:  # firmanin Turkiye ilani kalmadi
+            _, closed, prev, overlap, _ = upsert(con, r['id'], AGG_SOURCE, [], guard=False)
+            _record_run(dict(r), AGG_SOURCE, True, 0, 0, closed, prev, overlap)
+            _finish_company(con, dict(r), 'ats', "Workable aramasi: Turkiye'de ilani yok", 0)
+            STATE['closed'] += closed
+    _log(f'Workable aramasi: {len(jobs)} Turkiye ilani, {len(used)} firma' + (f', {added} yeni firma eklendi' if added else ''))
+
+
+SR_DISCOVER_DAYS = 7
+
+
+def discover_smartrecruiters(con, force=False):
+    """SmartRecruiters genel aramasinda Turkiye'de ilani gorunen, listede olmayan firmalari SmartRecruiters hesabiyla ekle
+    (yalnizca Turkiye ilanlari; en az bir teknik ilan). Haftada bir calisir ('tam' taramada her zaman); ilanlari normal okuyucu okur."""
+    from . import search
+    last = search.load_config().get('sr_discovered_at')
+    if not force and last and (dt.date.today() - dt.date.fromisoformat(last[:10])).days < SR_DISCOVER_DAYS:
+        return
+    STATE.update(phase='iş platformu keşfi (SmartRecruiters, Türkiye)')
+    try:
+        found = agg.smartrecruiters_companies()
+    except Exception as e:  # noqa: BLE001
+        log.warning('smartrecruiters aramasi okunamadi', exc_info=True)
+        _log(f'SmartRecruiters aramasi okunamadi: {str(e)[:100]}')
+        return
+    have = {(r[0] or '').lower() for r in db.tl().execute("SELECT ats_slug FROM companies WHERE ats='smartrecruiters'")}
+    index = agg.company_index(db.tl())
+    added = 0
+    for ident, name in found.items():
+        if _stop.is_set():
+            return
+        if ident.lower() in have:
+            continue
+        try:
+            jobs = atsmod.smartrecruiters(ident, 'tr')
+        except Exception:  # noqa: BLE001 - hesap kapali / gecici hata: sonraki kesifte yeniden denenir
+            continue
+        if not any(agg.is_software(j['title']) for j in jobs):
+            continue
+        row = agg.match({'name': name}, index)
+        if row is not None:
+            if not _own_source(row):
+                db.write(db.tl(), "UPDATE companies SET ats='smartrecruiters', ats_slug=?, ats_extra='tr', tr_only=1 WHERE id=?",
+                         (ident, row['id']))
+                added += 1
+            continue
+        _new_company(name, None, _city(jobs[0]['location'] if jobs else ''), 'smartrecruiters', ident, 'tr')
+        added += 1
+        _log(f'SmartRecruiters: {name} eklendi ({len(jobs)} Turkiye ilani)')
+    cfg = search.load_config()
+    cfg['sr_discovered_at'] = dt.datetime.now().isoformat(timespec='minutes')
+    search.save_config(cfg)
+    _log(f'SmartRecruiters kesfi: {len(found)} firma goruldu, {added} firma eklendi/baglandi')
 
 
 PROGRAM_RECHECK_DAYS = 30
@@ -488,6 +624,9 @@ def run(mode='hizli', company_id=None, auto=False):
         added = db.sync_excel(con)
         if added:
             _log(f"Excel'den {added} yeni firma eklendi")
+        s_add, s_link = db.sync_seeds(con)
+        if s_add or s_link:
+            _log(f'firmalar_global.json: {s_add} yeni firma eklendi, {s_link} firmaya ATS hesabi baglandi')
         known_sql = "SELECT * FROM companies WHERE merged_into IS NULL AND (ats IN ({}) OR ats='custom')".format(','.join(f"'{a}'" for a in atsmod.READERS))
         if mode == 'site':
             from . import search
@@ -519,12 +658,14 @@ def run(mode='hizli', company_id=None, auto=False):
             _browser_pool(con, [c], 1, force=True)
         elif mode == 'hatali':
             err_rows = [dict(r) for r in db.tl().execute(
-                "SELECT * FROM companies WHERE merged_into IS NULL AND (status='hata' OR id IN ("
+                "SELECT * FROM companies WHERE merged_into IS NULL AND COALESCE(ats, '')!='agg' AND (status='hata' OR id IN ("
                 "SELECT company_id FROM (SELECT company_id, ok, ROW_NUMBER() OVER (PARTITION BY company_id ORDER BY id DESC) AS n FROM source_runs) WHERE n=1 AND ok=0))")]
             STATE.update(total=len(err_rows), phase='sorunlu / hata veren kaynaklar yeniden taranıyor')
             _log(f'{len(err_rows)} sorunlu kaynak yeniden taraniyor')
             _browser_pool(con, err_rows, workers=4, force=True)
         else:
+            if mode in ('hizli', 'tam') and not _stop.is_set():
+                discover_smartrecruiters(con, force=mode == 'tam')  # yeni firmalar bilinen kaynaklarla birlikte okunsun
             known = [dict(r) for r in db.tl().execute(known_sql)]
             STATE.update(total=len(known), phase='bilinen kaynaklar (ATS + ozel okuyucular)')
             _log(f'{len(known)} bilinen kaynak taraniyor')
@@ -537,6 +678,8 @@ def run(mode='hizli', company_id=None, auto=False):
                 STATE['done'] += 1
             with ThreadPoolExecutor(10) as ex:
                 list(ex.map(one, known))
+            if not _stop.is_set():
+                scan_aggregators(con)
             if mode == 'hizli' and not _stop.is_set():
                 gen = [dict(r) for r in db.tl().execute("SELECT * FROM companies WHERE merged_into IS NULL AND ats='generic' AND status='genel' AND career_url IS NOT NULL")]
                 STATE.update(total=STATE['total'] + len(gen), phase='kariyer sayfasindan ilan veren firmalar')
@@ -549,7 +692,7 @@ def run(mode='hizli', company_id=None, auto=False):
                     _browser_pool(con, progs, workers=4, fn=scan_programs)
             if mode == 'tam' and not _stop.is_set():
                 rest = [dict(r) for r in db.tl().execute(
-                    "SELECT * FROM companies WHERE merged_into IS NULL AND (NOT (ats IN ({}) OR ats='custom') OR ats IS NULL) ORDER BY "
+                    "SELECT * FROM companies WHERE merged_into IS NULL AND (NOT (ats IN ({}) OR ats IN ('custom', 'agg')) OR ats IS NULL) ORDER BY "
                     "CASE WHEN size LIKE 'Büyük%' THEN 0 WHEN size LIKE 'Orta%' THEN 1 ELSE 2 END, id"
                     .format(','.join(f"'{a}'" for a in atsmod.READERS)))]
                 STATE.update(total=STATE['total'] + len(rest), phase='kariyer sayfalari (kesif + gercek tarayici)')

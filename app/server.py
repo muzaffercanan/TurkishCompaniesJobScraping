@@ -28,6 +28,7 @@ app = Flask(__name__, static_folder=None)
 _c = db.connect()
 db.import_excel(_c)
 db.sync_excel(_c)
+db.sync_seeds(_c)
 
 
 @app.before_request
@@ -240,6 +241,10 @@ def company_update(cid):
     if 'career_url' in d:  # elle verilen kariyer sayfasi: ATS'i yeniden tespit ettirmek icin kesfi sifirla
         db.write(g.con, "UPDATE companies SET career_url=?, ats=CASE WHEN ats='custom' THEN ats ELSE 'generic' END, checked_at=? WHERE id=?",
                  (d['career_url'] or None, None, cid))
+    if 'hide_jobs' in d:  # firmanin tum ilanlari Gizlenenler'e (ya da geri); yeni gelen ilanlari da tarama gizli ekler
+        v = 1 if d['hide_jobs'] else 0
+        db.write(g.con, 'UPDATE companies SET hide_jobs=? WHERE id=?', (v, cid))
+        db.write(g.con, 'UPDATE jobs SET hidden=?, seen=MAX(seen, ?) WHERE company_id=?', (v, v, cid))
     return jsonify(ok=True)
 
 

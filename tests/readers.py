@@ -22,6 +22,16 @@ CASES = [
     ('workday_accenture', 'ats', 'workday', ('accenture', 'wd103|AccentureCareers')),  # Turkiye ulke filtresi uygulanir
     ('teamtailor_pulsetto', 'ats', 'teamtailor', None),
     ('personio_kunbus', 'ats', 'personio', None),
+    ('workday_mastercard', 'ats', 'workday', ('mastercard', 'wd1|CorporateCareers')),  # ulke filtresi yok: konum filtresinden Turkiye
+    ('smartrecruiters_bosch_tr', 'ats', 'smartrecruiters', ('BoschGroup', 'tr')),   # API ulke filtresi
+    ('eightfold_vodafone', 'ats', 'eightfold', ('jobs.vodafone.com', 'vodafone.com')),
+    ('oracle_jpmorgan', 'ats', 'oracle', ('CX_1001', 'jpmc.fa.oraclecloud.com')),
+    ('phenom_dhl', 'ats', 'phenom', ('careers.dhl.com', 'en_global')),
+    ('talentbrew_citi', 'ats', 'talentbrew', ('jobs.citi.com', '287')),
+    ('avature_siemens', 'ats', 'avature', ('jobs.siemens.com', 'en_US/externaljobs/SearchJobs/?42386=%5B811999%5D&42386_format=17546&listFilterMode=1')),
+    ('avature_siemens_energy', 'ats', 'avature', ('jobs.siemens-energy.com', 'en_US/jobs/Jobs')),  # Turkiye filtresi sayfadaki secim kutusundan
+    ('successfactors_ey_tr', 'ats', 'successfactors', ('ey', 'careers.ey.com|Turkey')),
+    ('talentics_kolayik', 'ats', 'talentics', ('jobs', 'jobs.kolayik.com')),
     ('custom_turkcell', 'custom', 'turkcell', ()),
     ('custom_garanti', 'custom', 'garanti', ()),
     ('custom_havelsan', 'custom', 'havelsan', ()),

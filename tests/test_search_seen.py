@@ -200,6 +200,14 @@ class ServerFeatures(TempDb):
         self.assertEqual([c['id'] for c in r], [1])
         self.assertEqual(self.client.get('/api/companies?city=Ankara').get_json(), [])
 
+    def test_hide_company_jobs_and_back(self):  # Firmalar sekmesi: 'Ilanlari gizle' / 'Ilanlari goster'
+        self.client.post('/api/companies/1', json={'hide_jobs': True})
+        self.assertEqual(self.client.get('/api/jobs').get_json(), [])
+        self.assertEqual(sorted(j['id'] for j in self.client.get('/api/jobs?hidden=only').get_json()), [10, 11])
+        self.assertEqual(self.client.get('/api/companies').get_json()[0]['hide_jobs'], 1)
+        self.client.post('/api/companies/1', json={'hide_jobs': False})
+        self.assertEqual(len(self.client.get('/api/jobs').get_json()), 2)
+
 
 if __name__ == '__main__':
     unittest.main()

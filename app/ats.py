@@ -8,7 +8,7 @@ import time
 import urllib.parse
 
 from . import dom
-from .util import HttpError, fetch, fetch_json, norm, text
+from .util import TR_PLACE, HttpError, fetch, fetch_json, norm, text
 
 
 class Jobs(list):
@@ -51,6 +51,7 @@ PATTERNS = [
     ('workday', r'(?<![A-Za-z0-9-])([A-Za-z0-9-]{1,63})\.(wd\d+)\.myworkdayjobs\.com/(?:[a-z]{2}-[A-Z]{2}/)?([A-Za-z0-9_-]+)'),
     ('successfactors', r'(career\d*\.successfactors\.(?:com|eu))/career\?company=([A-Za-z0-9_-]+)'),
     ('rippling', r'ats\.rippling\.com/(?:[a-z]{2}-[A-Z]{2}/)?([A-Za-z0-9_-]+)/jobs'),
+    ('talentics', r'(?<![A-Za-z0-9-])([A-Za-z0-9-]{1,63})\.talentics\.app'),
     # okuyucusu olmayanlar (genel ayristirici kullanilir, ama hangi sistem oldugu kaydedilir)
     ('comeet', r'comeet\.(?:co|com)/jobs/([A-Za-z0-9_-]+)'),
     ('icims', r'(careers?-[A-Za-z0-9-]{1,63})\.icims\.com'),
@@ -73,7 +74,7 @@ PATTERNS = [(a, re.compile(p, re.I)) for a, p in PATTERNS]
 BAD_SLUG = {'embed', 'api', 'v1', 'jobs', 'job', 'www', 'careers', 'career', 'apply', 'static', 'assets', 'cdn', 'js', 'images',
             'app', 'help', 'support', 'blog', 'en', 'tr', 'de', 'careers-analytics', 'analytics', 'widget', 'portal'}
 READERS = {'lever', 'greenhouse', 'ashby', 'workable', 'smartrecruiters', 'recruitee', 'personio', 'bamboohr', 'breezy',
-           'pinpoint', 'teamtailor', 'workday', 'successfactors', 'manatal', 'jazzhr', 'rippling'}
+           'pinpoint', 'teamtailor', 'workday', 'successfactors', 'manatal', 'jazzhr', 'rippling', 'eightfold', 'talentbrew', 'talentics', 'oracle', 'phenom', 'avature'}
 REDIRECT_ONLY = {'kariyer.net', 'linkedin'}
 
 
@@ -86,6 +87,8 @@ def has_reader(ats, extra=None):
 
 _DATA_URI = re.compile(r'data:[a-z/+.-]+;base64,[A-Za-z0-9+/=]{64,}|[A-Za-z0-9+/=]{2000,}')
 _RMK_SIG = re.compile(r'j2w\.(?:kickstart|init)|class=["\'][^"\']*jobTitle-link', re.I)
+_TB_SIG = re.compile(r'tbcdn\.talentbrew\.com/company/(\d+)/', re.I)
+_EF_SIG = re.compile(r'static\.vscdn\.net|eightfold\.ai|/api/pcsx/', re.I)
 
 
 def detect(blob):
@@ -99,6 +102,17 @@ def detect(blob):
         found.append(('recruitee', pslug, phost))
     if phost and 'successfactors' not in phost and _RMK_SIG.search(blob):
         found.append(('successfactors', pslug, phost))
+    tb = _TB_SIG.search(blob)
+    if phost and tb:  # Radancy TalentBrew: firma numarasi CDN adresinde
+        found.append(('talentbrew', phost, tb.group(1)))
+    if phost and 'talentics.app' not in phost and 'cdn.talentics.app' in blob:  # firma alan adinda Talentics sayfasi
+        found.append(('talentics', pslug, phost))
+    if phost and 'phenompeople' in blob:  # Phenom: dil/bolge adresten (/global/en/ -> en_global)
+        lm = re.match(r'\s*https?://[^/]+/([a-z]{2,10})/([a-z]{2})/', blob)
+        found.append(('phenom', phost, f'{lm.group(2)}_{lm.group(1)}' if lm else 'en_global'))
+    if phost and _EF_SIG.search(blob):  # Eightfold: sitenin kendi /api/pcsx ucu
+        dom_m = re.search(r'[?&]domain=([a-z0-9-]+(?:\.[a-z0-9-]+)+)', blob)
+        found.append(('eightfold', phost, dom_m.group(1) if dom_m else '.'.join(phost.split('.')[-2:])))
     for ats, rx in PATTERNS:
         for m in rx.finditer(blob):
             g = [x for x in m.groups() if x is not None]
@@ -157,9 +171,11 @@ def workable(slug, extra=None):
 
 
 def smartrecruiters(slug, extra=None):
+    """extra='tr': yalnizca Turkiye ilanlari (API ulke filtresi; Bosch gibi binlerce ilanli cok uluslu hesaplar icin)."""
     out, off = [], 0
+    country = '&country=tr' if extra == 'tr' else ''
     while True:
-        d = fetch_json(f'https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=100&offset={off}')
+        d = fetch_json(f'https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=100&offset={off}{country}')
         for j in d.get('content', []):
             loc = j.get('location') or {}
             out.append(dict(id=j['id'], title=j.get('name', ''), location=', '.join(x for x in (loc.get('city'), loc.get('country')) if x),
@@ -234,7 +250,7 @@ def teamtailor(slug, extra=None):
     return out
 
 
-_TURKEY = re.compile(r'^(turkiye|turkey|turkei|turqu|turchia)')  # norm() ile sadelestirilmis ulke adi (arayuz dili degisebilir)
+_TURKEY = re.compile(r'^(turkiye|turkey|turkei|tuerkei|tuerkiye|turqu|turchia)')  # norm() ile sadelestirilmis ulke adi (arayuz dili degisebilir)
 _WD_MANY = re.compile(r'^\d+\s+\S+$')  # "2 Locations" / "3 Konum": birden fazla konum, gercek yer adi degil
 
 
@@ -247,6 +263,20 @@ def _wd_country(facets):
             ids = [v['id'] for v in vals if v.get('id') and _TURKEY.match(norm(v.get('descriptor')))]
             return param, ids, sum(v.get('count') or 0 for v in vals)
         sub = _wd_country([v for v in vals if 'facetParameter' in v])
+        if sub:
+            return sub
+    return None
+
+
+def _wd_places(facets):
+    """Ulke filtresi olmayan hesaplarda konum filtresi (or. Mastercard 'locations': 'Besiktas, Istanbul Turkey').
+    Dondurur: (parametre, [Turkiye'deki konum id'leri], degerlerin toplam ilan sayisi) ya da konum filtresi yoksa None."""
+    for f in facets or []:
+        param, vals = f.get('facetParameter') or '', f.get('values') or []
+        if param.lower() in ('locations', 'location', 'primarylocation'):
+            ids = [v['id'] for v in vals if v.get('id') and TR_PLACE.search(norm(v.get('descriptor')))]
+            return param, ids, sum(v.get('count') or 0 for v in vals)
+        sub = _wd_places([v for v in vals if 'facetParameter' in v])
         if sub:
             return sub
     return None
@@ -271,14 +301,14 @@ def _wd_page(api, off, facets):
 
 
 def workday(slug, extra=None):
-    """Workday CXS uc noktasi (sayfali). Hesapta ulke filtresi varsa yalnizca Turkiye ilanlari alinir: cok uluslu hesaplarda
-    (Accenture, Samsung) binlerce yurt disi ilani gelmesin ve 2000 sonuc sinirina takilinmasin."""
+    """Workday CXS uc noktasi (sayfali). Hesapta ulke filtresi (yoksa konum filtresi) varsa yalnizca Turkiye ilanlari alinir:
+    cok uluslu hesaplarda (Accenture, Samsung, Mastercard) binlerce yurt disi ilani gelmesin ve 2000 sonuc sinirina takilinmasin."""
     wd, site = (extra or 'wd3|External').split('|')
     base = f'https://{slug}.{wd}.myworkdayjobs.com'
     api = f'{base}/wday/cxs/{slug}/{site}/jobs'
     d = _wd_page(api, 0, {})
     total_all, facets = d.get('total') or 0, {}
-    country = _wd_country(d.get('facets'))
+    country = _wd_country(d.get('facets')) or _wd_places(d.get('facets'))  # konum degerleri cok konumlu ilanlarda toplami asar
     if country:
         param, ids, counted = country
         if ids:
@@ -306,13 +336,15 @@ def workday(slug, extra=None):
 
 
 def successfactors(slug, extra=None):
-    """SAP SuccessFactors RMK kariyer siteleri: arama sayfasi HTML'i (sayfalanir)."""
-    host = extra if extra and 'successfactors' not in extra else None
-    if not host:
+    """SAP SuccessFactors RMK kariyer siteleri: arama sayfasi HTML'i (sayfalanir).
+    extra = sunucu ya da 'sunucu|Turkey': cok uluslu sitelerde (EY, Vestas) yalnizca konum aramasina uyan ilanlar okunur."""
+    host, _, where = (extra or '').partition('|')
+    if not host or 'successfactors' in host:
         raise HttpError('okuyucu-yok', slug, 'SuccessFactors klasik portal (genel ayristirici kullanilacak)')
+    locq = f'&locationsearch={urllib.parse.quote(where)}' if where else ''
     out, seen, start = [], set(), 0
     while start < 1000:
-        _, _, t = fetch(f'https://{host}/search/?q=&sortColumn=referencedate&sortDirection=desc&startrow={start}', robots=True)
+        _, _, t = fetch(f'https://{host}/search/?q={locq}&sortColumn=referencedate&sortDirection=desc&startrow={start}', robots=True)
         doc, found = dom.parse(t), 0
         # her ilan bir satir (tr.data-row); satir yoksa sayfadaki tum a.jobTitle-link (masaustu + mobil kopyalari tekillesir)
         for row in doc.find_all('tr', cls='data-row') or doc.find_all('a', cls='jobTitle-link'):
@@ -373,10 +405,215 @@ def rippling(slug, extra=None):
     return out
 
 
+def eightfold(slug, extra=None):
+    """Eightfold AI kariyer siteleri (Microsoft, Ericsson, Vodafone): sitenin kendi arama ucu, 'Turkey' konum filtresiyle.
+    slug = kariyer sitesinin sunucusu (jobs.vodafone.com), extra = Eightfold alan adi (vodafone.com)."""
+    host, domain = slug, extra or '.'.join(slug.split('.')[-2:])
+    out, start, total = [], 0, None
+    while start < 1000:
+        d = fetch_json(f'https://{host}/api/pcsx/search?domain={domain}&query=&location=Turkey&start={start}', robots=True).get('data') or {}
+        if total is None:
+            total = d.get('count') or 0
+        posts = d.get('positions') or []
+        for j in posts:
+            # konum filtresi bulanik (yakin/benzer yerler de gelir): konumlarindan biri Turkiye olmayan ilan alinmaz; Turkiye basa
+            locs = sorted(j.get('locations') or [], key=lambda x: not TR_PLACE.search(norm(x)))
+            if not any(TR_PLACE.search(norm(x)) for x in locs + (j.get('standardizedLocations') or [])):
+                continue
+            out.append(dict(id=str(j['id']), title=j.get('name', ''), location='; '.join(locs[:3]), team=j.get('department') or '',
+                            url=f"https://{host}{j.get('positionUrl') or '/careers/job/' + str(j['id'])}",
+                            posted=_ms((j.get('postedTs') or 0) * 1000) if j.get('postedTs') else None,
+                            remote=j.get('workLocationOption') == 'remote',
+                            detail=('eightfold', f"https://{host}/api/pcsx/position_details?position_id={j['id']}&domain={domain}&hl=en")))
+        start += len(posts)
+        if not posts or start >= total:
+            break
+        time.sleep(0.4)
+    return Jobs(out, note=f'Turkiye filtresi: {len(out)} ilan', confirmed=True)  # bos sonuc: sitede Turkiye ilani yok
+
+
+def _orc_turkey(host):
+    """Oracle Recruiting Cloud: hesabin cografya kaydindaki Turkiye kimligi (ulke duzeyi, Level 1) ya da None."""
+    for term in ('T%C3%BCrkiye', 'Turkey'):
+        d = fetch_json(f'https://{host}/hcmRestApi/resources/latest/recruitingCESearchAutoSuggestions'
+                       f'?expand=all&onlyData=true&finder=findByLoc;string={term}&limit=20')
+        hit = next((i for i in d.get('items') or [] if i.get('Level') == 1 and _TURKEY.match(norm(i.get('Country') or i.get('Name')))), None)
+        if hit:
+            return hit['Id']
+    return None
+
+
+def oracle(slug, extra=None):
+    """Oracle Recruiting Cloud (JPMorgan, Uber, Fortinet, Nokia...): CandidateExperience REST ucu, Turkiye konum kimligiyle.
+    slug = site numarasi (CX_1001), extra = sunucu (jpmc.fa.oraclecloud.com)."""
+    site, host = slug, extra
+    loc = _orc_turkey(host)
+    if not loc:
+        return Jobs(note="Turkiye konumu yok", confirmed=True)
+    out, off, total = [], 0, None
+    while off < 1000:
+        finder = f'findReqs;siteNumber={site},limit=25,locationId={loc},offset={off},sortBy=POSTING_DATES_DESC'
+        d = fetch_json(f'https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions?onlyData=true'
+                       f'&expand=requisitionList.secondaryLocations&finder={urllib.parse.quote(finder, safe="=,;")}')['items'][0]
+        if total is None:
+            total = d.get('TotalJobsCount') or 0
+        reqs = d.get('requisitionList') or []
+        for j in reqs:
+            url = f"https://{host}/hcmUI/CandidateExperience/en/sites/{site}/job/{j['Id']}"
+            out.append(dict(id=str(j['Id']), title=j.get('Title', ''), location=j.get('PrimaryLocation') or 'Türkiye', team=j.get('JobFamily') or '',
+                            url=url, posted=_d(j.get('PostedDate')), remote=(j.get('WorkplaceTypeCode') or '') == 'ORA_REMOTE',
+                            detail=('oracle', f'https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails?expand=all'
+                                              f'&onlyData=true&finder=ById;Id=%22{j["Id"]}%22,siteNumber={site}')))
+        off += len(reqs)
+        if not reqs or off >= total:
+            break
+        time.sleep(0.4)
+    return Jobs(out, note=f'Turkiye filtresi: {len(out)} ilan', confirmed=True)
+
+
+def _ph_search(host, lang, sel, start, size):
+    country = lang.split('_')[1]
+    body = {'lang': lang, 'deviceType': 'desktop', 'country': country, 'pageName': 'search-results', 'ddoKey': 'refineSearch',
+            'sortBy': '', 'subsearch': '', 'from': start, 'jobs': True, 'counts': True, 'all_fields': ['country'], 'size': size,
+            'clearAll': False, 'jdsource': 'facets', 'isSliderEnable': False, 'siteType': 'external', 'keywords': '', 'global': True,
+            'selected_fields': sel, 'locationData': {}}
+    _, _, t = fetch(f'https://{host}/widgets', data=json.dumps(body).encode(), method='POST', robots=True,
+                    headers={'Content-Type': 'application/json', 'Accept': 'application/json'})
+    return (json.loads(t).get('refineSearch') or {})
+
+
+def phenom(slug, extra=None):
+    """Phenom kariyer siteleri (DHL, Cisco, UPS, Siemens Healthineers...): sitenin /widgets arama ucu, ulke filtresiyle.
+    Ulke degeri siteye gore 'Turkey' ya da 'Türkiye': once ulke dagilimindan bulunur. slug = sunucu, extra = dil (en_global)."""
+    host, lang = slug, extra or 'en_global'
+    first = _ph_search(host, lang, {}, 0, 1)
+    aggs = (first.get('data') or {}).get('aggregations') or []
+    vals = [k for a in aggs if a.get('field') == 'country' for k, v in (a.get('value') or {}).items() if v and _TURKEY.match(norm(k))]
+    if not vals:
+        return Jobs(note=f"Turkiye'de ilani yok (toplam {first.get('totalHits') or 0})", confirmed=True)
+    base = f"https://{host}/{lang.split('_')[1]}/{lang.split('_')[0]}/job/"
+    out, start, total = [], 0, None
+    while start < 1000:
+        d = _ph_search(host, lang, {'country': vals}, start, 50)
+        if total is None:
+            total = d.get('totalHits') or 0
+        jobs = (d.get('data') or {}).get('jobs') or []
+        for j in jobs:
+            jid = j.get('jobId') or j.get('jobSeqNo')
+            out.append(dict(id=str(jid), title=j.get('title', ''), location=j.get('location') or j.get('cityStateCountry') or 'Türkiye',
+                            team=j.get('category') or ', '.join(j.get('multi_category') or []), url=base + urllib.parse.quote(str(jid)),
+                            posted=_d(j.get('postedDate')), remote=False,  # descriptionTeaser kisa: aciklama detay sayfasindan
+                            detail=('page', base + urllib.parse.quote(str(jid)))))
+        start += len(jobs)
+        if not jobs or start >= total:
+            break
+        time.sleep(0.4)
+    return Jobs(out, note=f'Turkiye filtresi: {len(out)} / {first.get("totalHits") or 0} ilan', confirmed=True)
+
+
+def _av_turkey_filter(host, path):
+    """Avature arama sayfasinda ulke secim kutusu sayfada hazirsa (<option>Turkiye</option>) Turkiye filtresi: 'alan=deger'."""
+    for sel in dom.parse(fetch(f'https://{host}/{path}', robots=True)[2]).find_all('select'):
+        opt = next((o for o in sel.find_all('option') if _TURKEY.match(norm(o.text()))), None)
+        if opt is not None and opt.get('value'):
+            name = sel.get('name') or ''
+            return f'{name[:-2]}=%5B{opt.get("value")}%5D' if name.endswith('[]') else f'{name}={opt.get("value")}'
+    return None
+
+
+def avature(slug, extra=None):
+    """Avature kariyer siteleri (Siemens, Siemens Energy...): sunucuda uretilen arama sayfasi, Turkiye filtresiyle, sayfali.
+    slug = sunucu, extra = arama sayfasinin yolu; Turkiye filtresi yolda hazir olabilir (Siemens: ulke kutusu sonradan yuklenir,
+    '?42386=%5B811999%5D&listFilterMode=1'), yoksa sayfadaki ulke secim kutusundan bulunur."""
+    host, path = slug, extra or 'careers/SearchJobs'
+    if '=' not in path:
+        flt = _av_turkey_filter(host, path)
+        if not flt:
+            return Jobs(note='Turkiye filtresi bulunamadi')
+        path = f"{path}{'&' if '?' in path else '?'}{flt}&listFilterMode=1"
+    out, seen, off = [], set(), 0
+    while off < 600:
+        _, _, t = fetch(f'https://{host}/{path}&folderOffset={off}&jobOffset={off}', robots=True)
+        found = 0
+        for a in dom.parse(t).find_all('a'):
+            m = re.search(r'/(?:JobDetail|FolderDetail)/(?:[^/?#]+/)?(\d+)/?$', a.get('href') or '')
+            if not m or m.group(1) in seen or not a.text() or not (a.closest('h3') or a.closest('h2')):
+                continue
+            seen.add(m.group(1))
+            found += 1
+            art = a.closest('article') or a.closest('li') or a.parent
+            loc = next((n for n in art.iter() if 'list-item-location' in n.classes or any('location' in c.lower() for c in n.classes)), None)
+            fam = next((n for n in art.iter() if any('family' in c.lower() or 'department' in c.lower() for c in n.classes)), None)
+            loc = loc.text().replace(' ,', ',') if loc else ''
+            if not TR_PLACE.search(norm(loc)):  # Turkiye filtresiyle geldi: 'Multiple Locations' gibi metinlere ulke eklenir
+                loc = f'{loc}, Türkiye' if loc else 'Türkiye'
+            out.append(dict(id=m.group(1), title=a.text(), location=loc, team=fam.text() if fam else '', url=a.get('href'), posted=None,
+                            remote=False, detail=('page', a.get('href'))))
+        if not found:
+            break
+        off += found
+        time.sleep(0.4)
+    return Jobs(out, note=f'Turkiye filtresi: {len(out)} ilan', confirmed=True)
+
+
+TB_TURKEY = 298795  # GeoNames: Turkiye (TalentBrew ulke sayfalarinin adresinde)
+
+
+def talentbrew(slug, extra=None):
+    """Radancy TalentBrew kariyer siteleri (Citi, IQVIA, Dell...): arama uclari robots.txt ile kapali, ulke sayfasi
+    (/location/turkey-jobs/<org>/298795/2) acik. slug = site sunucusu, extra = TalentBrew firma numarasi."""
+    host, org = slug, extra
+    out, seen, page, pages = [], set(), 1, 1
+    while page <= min(pages, 30):
+        _, _, t = fetch(f'https://{host}/location/turkey-jobs/{org}/{TB_TURKEY}/2' + (f'?p={page}' if page > 1 else ''), robots=True)
+        m = re.search(r'data-total-pages="(\d+)"', t)
+        pages = int(m.group(1)) if m else 1
+        for a in dom.parse(t).find_all('a'):
+            href, jid = a.get('href') or '', a.get('data-job-id')
+            if not jid or '/job/' not in href or jid in seen:
+                continue
+            seen.add(jid)
+            item = a.closest('li') or a.parent
+            loc = next((n for n in item.iter() if any('location' in c for c in n.classes)), None)
+            title = (a.find('h2') or a.find('h3') or a).text()
+            out.append(dict(id=jid, title=title, location=loc.text() if loc else 'Türkiye', team='',
+                            url=urllib.parse.urljoin(f'https://{host}/', href), posted=None, remote=False,
+                            detail=('page', urllib.parse.urljoin(f'https://{host}/', href))))
+        page += 1
+        time.sleep(0.4)
+    return Jobs(out, confirmed=True)  # ulke sayfasi bos: Turkiye ilani yok
+
+
+def talentics(slug, extra=None):
+    """Talentics / Kolay IK ise alim sayfalari (<slug>.talentics.app ya da firma alan adi): sunucuda uretilen liste.
+    Her ilan: a.job-link-title (baslik) + a.job-link-props ('Konum • Ekip • Calisma turu'). 'Genel basvuru' ilan sayilmaz."""
+    host = extra or f'{slug}.talentics.app'
+    doc = dom.parse(fetch(f'https://{host}/', robots=True)[2])
+    groups = {}
+    for a in doc.find_all('a'):
+        href = a.get('href') or ''
+        if re.match(r'(?:https?://[^/]+)?/jobs/[0-9a-f-]{20,}', href):
+            groups.setdefault(href.split('/jobs/')[1].split('?')[0], []).append(a)
+    out = []
+    for jid, links in groups.items():
+        title_a = next((a for a in links if 'job-link-title' in a.classes or a.find('h5') or a.find('h4') or a.find('h3')), None)
+        props_a = next((a for a in links if any('props' in c for c in a.classes)), None)
+        texts = [a.text() for a in links if a.get('role') != 'button']
+        title = title_a.text() if title_a else (texts[0] if texts else '')
+        if not title or re.search(r'genel basvuru|general application|acik basvuru', norm(title)):
+            continue
+        parts = [p.strip() for p in (props_a.text() if props_a else '').split('•')]
+        out.append(dict(id=jid, title=title, location=parts[0] if parts else '', team=parts[1] if len(parts) > 1 else '',
+                        url=f'https://{host}/jobs/{jid}', posted=None, remote='remote' in norm(parts[0] if parts else ''),
+                        detail=('page', f'https://{host}/jobs/{jid}')))
+    return out
+
+
 FETCHERS = {'lever': lever, 'greenhouse': greenhouse, 'ashby': ashby, 'workable': workable, 'smartrecruiters': smartrecruiters,
             'recruitee': recruitee, 'personio': personio, 'bamboohr': bamboohr, 'breezy': breezy, 'pinpoint': pinpoint,
             'teamtailor': teamtailor, 'workday': workday, 'successfactors': successfactors, 'manatal': manatal, 'jazzhr': jazzhr,
-            'rippling': rippling}
+            'rippling': rippling, 'eightfold': eightfold, 'talentbrew': talentbrew, 'talentics': talentics,
+            'oracle': oracle, 'phenom': phenom, 'avature': avature}
 
 
 def fetch_jobs(ats, slug, extra=None):

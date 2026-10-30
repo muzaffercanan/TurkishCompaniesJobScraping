@@ -135,6 +135,20 @@ class Robots(Base):
         with self.robots('User-agent: IlanRadari\nDisallow: /\n\nUser-agent: *\nAllow: /\n'):
             self.assertFalse(util.robots_ok('https://ornek.com/kariyer'))
 
+    def test_longest_match_wins(self):  # RFC 9309: 'Disallow: /' olsa da daha uzun 'Allow' kurali kazanir (Eightfold siteleri)
+        with self.robots('User-agent: *\nDisallow: /\nAllow: /$\nAllow: /api/pcsx\n'):
+            self.assertTrue(util.robots_ok('https://jobs.ornek.com/api/pcsx/search?domain=ornek.com&start=10'))
+            self.assertTrue(util.robots_ok('https://jobs.ornek.com/'))
+            self.assertFalse(util.robots_ok('https://jobs.ornek.com/api/other'))
+
+    def test_wildcards_and_tie(self):
+        r = util.Robots('User-agent: *\nDisallow: /*.pdf$\nDisallow: /kariyer\nAllow: /kariyer\nDisallow: /a*/b\n')
+        self.assertFalse(r.allowed('https://x.com/dosya.pdf'))
+        self.assertTrue(r.allowed('https://x.com/dosya.pdf?v=1'))
+        self.assertTrue(r.allowed('https://x.com/kariyer/ilan'))  # esit uzunlukta Allow kazanir
+        self.assertFalse(r.allowed('https://x.com/abc/b/c'))
+        self.assertTrue(util.Robots('User-agent: *\nDisallow:\n').allowed('https://x.com/a'))
+
     def test_missing_or_unreadable_robots_allows(self):
         for err in (404, 'URLError'):
             util._robots.clear()
@@ -142,8 +156,7 @@ class Robots(Base):
                 self.assertTrue(util.robots_ok('https://ornek.com/kariyer'), err)
 
     def test_fetch_with_robots_raises_without_requesting(self):
-        util._robots['https://ornek.com'] = util.urllib.robotparser.RobotFileParser()
-        util._robots['https://ornek.com'].parse(self.ROBOTS.splitlines())
+        util._robots['https://ornek.com'] = util.Robots(self.ROBOTS)
         with mock.patch('urllib.request.urlopen') as op:
             with self.assertRaises(HttpError) as cm:
                 util.fetch('https://ornek.com/kariyer', robots=True)

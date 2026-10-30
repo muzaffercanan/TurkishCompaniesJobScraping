@@ -683,13 +683,13 @@ function companyRow(c){
   const st = STATUS[c.status || 'taranmadi'] || [c.status, ''];
   const ats = [c.ats && c.ats !== 'generic' ? c.ats + (c.ats_slug ? '/' + c.ats_slug : '') : '', c.ats_extra && c.ats === 'generic' ? c.ats_extra : ''].filter(Boolean).join(' · ');
   const n = encodeURIComponent(c.name);
-  return `<tr><td><div class="co-cell">${avatar(c.name, 'sm')}<div><div class="t">${esc(c.name)}</div><div class="muted">${esc(c.size || '')}</div></div></div></td>
+  return `<tr><td><div class="co-cell">${avatar(c.name, 'sm')}<div><div class="t">${esc(c.name)}</div><div class="muted">${esc(c.size || '')}${c.hide_jobs ? ' · ilanları gizli' : ''}</div></div></div></td>
     <td class="hide-md cat muted">${esc(c.category || '')}<br>${esc(c.city || '')}</td>
     <td><div class="edit"><input class="inp" value="${esc(c.website || '')}" data-w="${c.id}" placeholder="https://…"><button class="btn sm" data-sw="${c.id}">Kaydet</button></div><div class="muted">${esc(c.website_source || '')}</div></td>
     <td><div class="edit"><input class="inp" value="${esc(c.career_url || '')}" data-k="${c.id}" placeholder="kariyer sayfası adresi"><button class="btn sm" data-sk="${c.id}">Kaydet</button></div><div class="muted">${esc(ats)}</div></td>
     <td><span class="pill ${st[1]}" title="${esc(c.status_note || '')}">${esc(st[0])}</span><div class="muted">${esc((c.status_note || '').slice(0, 70))}</div></td>
     <td>${c.job_count ? `<a href="#" data-cj="${c.id}" data-cn="${esc(c.name)}">${c.job_count}</a>` : '<span class="muted">0</span>'}</td>
-    <td><button class="btn sm" data-rs="${c.id}">Yeniden keşfet</button><div class="links"><a href="https://www.kariyer.net/is-ilanlari?kw=${n}" target="_blank" rel="noopener" title="Bu firmayı Kariyer.net'te ara">Kariyer.net ↗</a><a href="https://www.linkedin.com/jobs/search/?keywords=${n}&location=T%C3%BCrkiye" target="_blank" rel="noopener" title="Bu firmanın LinkedIn ilanları">LinkedIn ↗</a></div></td></tr>`;
+    <td><button class="btn sm" data-rs="${c.id}">Yeniden keşfet</button> <button class="btn sm" data-hj="${c.id}" data-hv="${c.hide_jobs ? 0 : 1}" title="${c.hide_jobs ? 'Bu firmanın ilanları normal listede görünsün' : 'Bu firmanın ilanları (yenileri dahil) Gizlenenler’e taşınsın'}">${c.hide_jobs ? 'İlanları göster' : 'İlanları gizle'}</button><div class="links"><a href="https://www.kariyer.net/is-ilanlari?kw=${n}" target="_blank" rel="noopener" title="Bu firmayı Kariyer.net'te ara">Kariyer.net ↗</a><a href="https://www.linkedin.com/jobs/search/?keywords=${n}&location=T%C3%BCrkiye" target="_blank" rel="noopener" title="Bu firmanın LinkedIn ilanları">LinkedIn ↗</a></div></td></tr>`;
 }
 async function loadCompanies(){
   const p = new URLSearchParams();
@@ -710,6 +710,7 @@ $('#cbody').addEventListener('click', async e => {
   if(d.sk) save({career_url:$(`[data-k="${d.sk}"]`).value.trim()}, b);
   if(d.rs){ const r = await post(`/api/companies/${d.rs}/scan`); toast(r.started ? 'Yeniden keşif başladı' : 'Şu an başka bir tarama çalışıyor.', {err:!r.started}); poll(); }
   if(d.cj){ e.preventDefault(); openCompany(+d.cj, d.cn); }
+  if(d.hj){ await post('/api/companies/' + d.hj, {hide_jobs: d.hv === '1'}); toast(d.hv === '1' ? 'Firmanın ilanları Gizlenenler’e taşındı' : 'Firmanın ilanları geri getirildi'); loadCompanies(); loadMeta(); loadJobs(); }
 });
 $('#cbody').addEventListener('keydown', e => { if(e.key !== 'Enter' || !e.target.matches('.edit .inp')) return;
   e.target.parentElement.querySelector('button').click(); });

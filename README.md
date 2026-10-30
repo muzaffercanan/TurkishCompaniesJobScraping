@@ -7,8 +7,12 @@ Türkiye'deki ~2.000 yazılım/teknoloji/oyun firmasının kariyer sayfalarını
 Kod güncellendiğinde açık pencereyi kapatıp `Baslat.bat` ile yeniden açman gerekir.
 Uygulama açıkken kendiliğinden tarama yapar (aşağıda “Otomatik tarama”); istemezsen sağ üstteki “Son tarama” göstergesinden kapat.
 
-- **Hızlı tara**: Bilinen ATS'ler, firmaya özel okuyucular ve kariyer sayfasından ilan veren firmalar. Birkaç dakika.
-  - ATS'ler: Lever, Greenhouse, Ashby, Workable, SmartRecruiters, Recruitee, Personio, BambooHR, Breezy, Pinpoint, Teamtailor, Workday, SuccessFactors (RMK), Manatal, JazzHR
+- **Hızlı tara**: Bilinen ATS'ler, firmaya özel okuyucular, iş platformu araması ve kariyer sayfasından ilan veren firmalar. Birkaç dakika.
+  - ATS'ler: Lever, Greenhouse, Ashby, Workable, SmartRecruiters, Recruitee, Personio, BambooHR, Breezy, Pinpoint, Teamtailor, Workday,
+    SuccessFactors (RMK), Manatal, JazzHR, Rippling, Talentics / Kolay İK
+  - Çok uluslu firmaların kariyer platformları (yalnızca Türkiye ilanları): Oracle Recruiting Cloud, Eightfold, Phenom,
+    Radancy TalentBrew, Avature (Türkiye filtreli arama adresiyle). Okuyucusu olmayanlar (iCIMS, Taleo, Jobvite, Zoho Recruit,
+    Peoplise, Peoplebox, HRPeak, JOIN, Homerun…) tespit edilip kaydedilir, ilanları genel ayrıştırıcıyla okunur.
   - Özel okuyucular: Turkcell, Garanti BBVA, Baykar, Roketsan, HAVELSAN, Türk Telekom, Amazon
     (Garanti BBVA'nın robots.txt'si arama motorları dışındaki botları engelliyor; izin verene kadar okunmaz, durumu `robots.txt engeli`)
 - **Yeni eklenenleri tara**: Excel'e sonradan eklenen ya da adresi düzeltilen, henüz hiç taranmamış firmalar.
@@ -25,8 +29,20 @@ Uygulama açıkken kendiliğinden tarama yapar (aşağıda “Otomatik tarama”
 - **Firmalar** sekmesi: her firmanın durumu; site / kariyer adresi düzeltme ve **Yeniden keşfet**; her satırda tek tıkla
   **Kariyer.net** ve **LinkedIn** araması (bu siteler taranmaz, arama senin tarayıcında açılır).
   Üstteki **Web sitesi bulma** bölümünden bir Brave Search API anahtarı girersen, sitesi bilinmeyen firmaların sitesi aranır.
-- **Workday**: hesapta ülke filtresi varsa yalnızca Türkiye ilanları alınır (çok uluslu hesaplarda binlerce yurt dışı ilanı gelmez);
-  hesapta hiç Türkiye ilanı yoksa eski ilanlar kapanır.
+- **Workday**: hesapta ülke filtresi (yoksa konum filtresi, ör. Mastercard) varsa yalnızca Türkiye ilanları alınır (çok uluslu
+  hesaplarda binlerce yurt dışı ilanı gelmez); hesapta hiç Türkiye ilanı yoksa eski ilanlar kapanır.
+- **Türkiye'de ilan veren çok uluslu firmalar** (`firmalar_global.json`): Mastercard, Visa, Citi, ING Hubs, J.P. Morgan, Microsoft,
+  Ericsson, Nokia, Vodafone, Siemens, Bosch, Cisco, HPE, Analog Devices, Oracle, Uber, DHL, EY, PwC, ilaç ve tüketici firmaları…
+  Uygulama her açılışta ve taramada bu listeyi veritabanına eşitler: listede olmayan firmayı ekler, olup da ATS'i bilinmeyen firmaya
+  hesabı bağlar (genel ayrıştırıcının bulduğu bağlantılar kapanır). Bu firmalarda **yalnızca Türkiye'deki ilanlar** alınır
+  (`tr_only`); listeye firma eklemek için dosyaya `{"firma", "ats", "slug", "extra"}` satırı ekle (`eslesme`: listedeki başka adı).
+- **İş platformu araması**: Workable'ın genel aramasındaki tüm Türkiye ilanları her hızlı/tam taramada okunur (`workable-tr`
+  kaynağı) ve firmalarına dağıtılır; SmartRecruiters'ın genel aramasında Türkiye'de ilanı görünen firmalar haftada bir (tam
+  taramada her seferinde) SmartRecruiters hesaplarıyla eklenir. Listede olmayan firma yalnızca en az bir yazılım/teknik ilanı varsa
+  “İş platformundan eklenen” kategorisiyle eklenir; kendi kaynağı olan firmanın ilanları buradan alınmaz (çift kayıt olmasın).
+- **Gizli firmalar**: Baykar, TUSAŞ (TEI dahil), Roketsan, ASELSAN ve TÜBİTAK birimlerinin ilanları varsayılan olarak
+  **Gizlenenler**'de durur (yenileri de gizli eklenir, “Bana uygun” bildirimi gitmez). Firmalar sekmesindeki **İlanları gizle /
+  İlanları göster** düğmesiyle herhangi bir firma için açıp kapatabilirsin.
 - **Program konumu**: sayfadan çıkarılır; çok uluslu firmaların Türkiye'den söz etmeyen genel sayfaları "Yurt dışı" sayılır.
 - **Kaynak sağlığı**: her kaynağın son iki taraması; ilan sayısı birden düşen, ilanları bir anda değişen (okuyucu bozulmuş
   olabilir) ve hata veren kaynaklar en üstte. Genel ayrıştırıcı kaynakları 5, diğerleri 10 ilandan itibaren denetlenir.
@@ -38,7 +54,9 @@ Uygulama açıkken kendiliğinden tarama yapar (aşağıda “Otomatik tarama”
 - **robots.txt**: firma sitelerinde (kariyer, program ve ilan sayfaları, özel okuyucuların uç noktaları, gerçek tarayıcıyla açılan
   sayfalar) robots.txt'ye uyulur; site başına bir kez okunur, yoksa ya da okunamazsa kısıtlama yok sayılır. İzin vermeyen kaynağın
   açık ilanları kapanır ve firma `robots.txt engeli` durumuna geçer; site izin verirse okuma kendiliğinden başlar.
-  ATS'lerin belgelenmiş herkese açık API'leri (Lever, Greenhouse, Workday, SmartRecruiters…) bu kuraldan muaftır.
+  ATS'lerin belgelenmiş herkese açık API'leri (Lever, Greenhouse, Workday, SmartRecruiters…) bu kuraldan muaftır; firmanın kendi
+  alan adındaki arama uçları (Eightfold, Phenom, Avature, TalentBrew, Talentics) ile iş platformu aramaları uyar.
+  Kurallar RFC 9309'a göre uygulanır: adrese uyan en uzun kural kazanır (`Disallow: /` + `Allow: /api/pcsx` → `/api/pcsx` serbest).
 - **Kimlik**: tüm istekler tek HTTP katmanından (`app/util.py: fetch`) ve aynı kimlikle gider: tarayıcı uyumlu UA + `IlanRadari/1.0`
   (robots.txt'de `User-agent: IlanRadari` ile eşleşir).
 - **Sertifika**: HTTPS sertifikası her zaman doğrulanır. Doğrulanamayan sitede (çoğu zaman ara sertifikasını göndermeyen sunucu)
@@ -82,6 +100,7 @@ Hiçbir ilan elenmez; seviye yalnızca filtre/sıralama için bir etikettir.
 | Etiket | Anlamı |
 |---|---|
 | `lever`, `greenhouse`, … | ATS'in herkese açık arayüzü, güvenilir |
+| `workable-tr` | Workable'ın genel aramasındaki Türkiye ilanı (firmanın kendi kaynağı yok) |
 | `ozel` | Firmaya özel yazılmış okuyucu |
 | `genel` | Kariyer sayfasından kural tabanlı çıkarım (ilan adresi + unvan, ya da aynı listede yan yana duran unvanlar); arada ilan olmayan bağlantılar olabilir, "Gizle" ile temizle |
 
@@ -100,6 +119,7 @@ Hiçbir ilan elenmez; seviye yalnızca filtre/sıralama için bir etikettir.
 - `data/app.db` tüm firmalar, ilanlar ve işaretlerin (başvurdum/gizle/favori/not). `data/config.json` arama API anahtarı (yalnızca bu bilgisayarda).
   `data/logs/` tarama günlükleri.
 - `Turkiye_Yazilim_Firmalari_v2.xlsx` firma listesi. Uygulama her açılışta Excel'e yeni eklenen firmaları alır.
+- `firmalar_global.json` Türkiye'de ilan veren çok uluslu firmalar ve ATS hesapları (her açılışta eşitlenir).
 
 ## Gereksinimler
 Python 3.12, `pip install flask playwright openpyxl`, `python -m playwright install chromium`.

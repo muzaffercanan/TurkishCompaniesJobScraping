@@ -8,7 +8,6 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-import urllib.robotparser
 
 log = logging.getLogger('ilan_radari')
 log.addHandler(logging.NullHandler())  # dosyaya yazim setup_file_log ile acilir (uygulama baslarken; testlerde degil)
@@ -72,6 +71,52 @@ def mark_insecure(host):
         log.warning('sertifika dogrulanamadi, bu sitede dogrulamasiz baglanilacak: %s', host)
 
 
+class Robots:
+    """robots.txt (RFC 9309): bize (IlanRadari) ozel grup varsa o, yoksa '*' grubu gecerlidir; adrese uyan kurallardan EN UZUN olan
+    kazanir, esitlikte Allow. ('Disallow: /' + 'Allow: /api/pcsx' gibi dosyalarda standart kutuphane ilk kurali uyguladigi icin
+    izinli adresleri yanlislikla engelliyordu.) Kaliplarda '*' herhangi bir dizi, sondaki '$' adres sonu demektir."""
+
+    def __init__(self, text=''):
+        groups, agents, rules, in_rules = [], [], [], False
+        for line in (text or '').splitlines():
+            line = line.split('#', 1)[0].strip()
+            if ':' not in line:
+                continue
+            key, val = (x.strip() for x in line.split(':', 1))
+            key = key.lower()
+            if key == 'user-agent':
+                if in_rules:  # yeni grup basliyor
+                    groups.append((agents, rules))
+                    agents, rules, in_rules = [], [], False
+                agents.append(val.lower())
+            elif key in ('allow', 'disallow') and agents:
+                in_rules = True
+                if val:  # bos 'Disallow:' hicbir seyi engellemez
+                    rules.append((key == 'allow', val))
+        if agents:
+            groups.append((agents, rules))
+        me = ROBOTS_AGENT.lower()
+        mine = [r for a, r in groups if any(x != '*' and me.startswith(x) for x in a)]
+        self.rules = [x for r in (mine or [r for a, r in groups if '*' in a]) for x in r]
+
+    @staticmethod
+    def _match(pattern, path):
+        end = pattern.endswith('$')
+        rx = '.*'.join(re.escape(p) for p in pattern.rstrip('$').split('*')) + ('$' if end else '')
+        return re.match(rx, path) is not None
+
+    def allowed(self, url):
+        p = urllib.parse.urlparse(url)
+        path = (p.path or '/') + (f'?{p.query}' if p.query else '')
+        best = None  # (uzunluk, allow)
+        for allow, pat in self.rules:
+            if self._match(pat, path):
+                cand = (len(pat), allow)
+                if best is None or cand > best:
+                    best = cand
+        return best is None or best[1]
+
+
 def robots_ok(url):
     """robots.txt bu adrese izin veriyor mu? Site basina bir kez okunur. robots.txt yoksa ya da okunamazsa izinli sayilir."""
     p = urllib.parse.urlparse(url)
@@ -79,15 +124,14 @@ def robots_ok(url):
     with _robots_lock:
         rp = _robots.get(root)
     if rp is None:
-        rp = urllib.robotparser.RobotFileParser()
         try:
             _, _, t = fetch(root + '/robots.txt', timeout=8, tries=1, max_bytes=500_000)
-            rp.parse(t.splitlines())
+            rp = Robots(t)
         except HttpError:
-            rp.parse([])  # kural yok: her yere izin
+            rp = Robots()  # kural yok: her yere izin
         with _robots_lock:
             _robots[root] = rp
-    return rp.can_fetch(ROBOTS_AGENT, url)
+    return rp.allowed(url)
 
 
 def fetch(url, data=None, method=None, headers=None, timeout=20, tries=2, max_bytes=3_000_000, robots=False):
@@ -145,6 +189,16 @@ _TR = str.maketrans({'İ': 'i', 'I': 'i', 'ı': 'i', 'ş': 's', 'Ş': 's', 'ğ':
 
 def norm(s):
     return (s or '').translate(_TR).lower()
+
+
+# norm() ile sadelestirilmis konum metninde Turkiye'yi gosteren parcalar: ulke adi (Turkiye/Turkey/Tuerkiye, 'X, TR' ulke kodu),
+# 81 ilin cogu (baska ulkelerde de gecebilecek kisa adlar kelime sinirli) ve bilinen semt/kampusler
+TR_PLACE = re.compile(r'turk|tuerk|(?:^|,)\s*tr\s*(?:,|$)|istanbul|ankara|izmir|kocaeli|gebze|bursa|antalya|eskisehir|konya|adana|'
+                      r'mersin|kayseri|sakarya|tekirdag|manisa|gaziantep|balikesir|denizli|samsun|trabzon|diyarbakir|sanliurfa|hatay|'
+                      r'malatya|erzurum|edirne|canakkale|aydin|mugla|bodrum|duzce|zonguldak|kutahya|afyon|usak|isparta|elazig|'
+                      r'kahramanmaras|osmaniye|nevsehir|kirikkale|kirklareli|yalova|bilecik|karabuk|kastamonu|corum|tokat|sivas|'
+                      r'yozgat|giresun|amasya|aksaray|karaman|mardin|adiyaman|cerkezkoy|dilovasi|\b(?:bolu|ordu|rize|batman|siirt)\b|'
+                      r'maslak|levent|kadikoy|atasehir|sariyer|besiktas|sisli|umraniye|kucukyali|pendik|tuzla|cankaya|odtu|bilkent')
 
 
 def tokens(s):

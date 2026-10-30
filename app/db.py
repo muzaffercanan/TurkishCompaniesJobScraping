@@ -11,6 +11,7 @@ import unicodedata
 ROOT =os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(ROOT, 'data', 'app.db')
 XLSX = os.path.join(ROOT, 'Turkiye_Yazilim_Firmalari_v2.xlsx')
+SEEDS = os.path.join(ROOT, 'firmalar_global.json')  # Turkiye'de ilan veren cok uluslu firmalar (Excel'de yok; ATS hesaplariyla)
 _lock = threading.Lock()
 _tls = threading.local()
 
@@ -61,6 +62,11 @@ def cutoff(days):
 FIT_LEVELS = ('Junior / Yeni mezun', 'Staj')
 FIT = "(j.level IN ('Junior / Yeni mezun','Staj') AND j.is_tech=1 AND j.region IN ('Türkiye','Uzaktan','Belirtilmemiş'))"
 
+# Ilanlari varsayilan olarak "Gizlenenler"e dusen firmalar (kullanici istegi: savunma sanayii ve TUBITAK normal listede gorunmesin).
+# Firma adinin fold() hali bu parcalardan birini icerirse companies.hide_jobs=1 olur (yalnizca sutun ilk eklendiginde;
+# sonrasinda Firmalar sekmesindeki "Ilanlari gizle" dugmesiyle degisir).
+HIDE_DEFAULT = ('baykar', 'tusas', 'roketsan', 'aselsan', 'tubitak')
+
 
 def search_clauses(q, cols):
     """Arama kutusu metnini SQL kosullarina cevirir: her kelime sutunlardan en az birinde gecmeli (kelime sirasi onemsiz;
@@ -90,6 +96,11 @@ def connect():
     for col in ('ats_extra', 'checked_at', 'merged_into', 'program_urls', 'program_checked'):
         if col not in cols:
             con.execute(f'ALTER TABLE companies ADD COLUMN {col} TEXT')
+    if 'hide_jobs' not in cols:  # firma bazinda gizleme: yeni ilanlari hidden=1 eklenir
+        con.execute('ALTER TABLE companies ADD COLUMN hide_jobs INTEGER DEFAULT 0')
+        _hide_defaults(con)
+    if 'tr_only' not in cols:  # cok uluslu firma: kaynagin yalnizca Turkiye'deki ilanlari alinir
+        con.execute('ALTER TABLE companies ADD COLUMN tr_only INTEGER DEFAULT 0')
     con.execute('''CREATE TABLE IF NOT EXISTS source_runs(
         id INTEGER PRIMARY KEY, run_at TEXT, company_id INTEGER, source TEXT, ok INTEGER, count INTEGER,
         new INTEGER, closed INTEGER, prev_active INTEGER, overlap REAL, error TEXT)''')
@@ -113,6 +124,15 @@ def connect():
                 con.commit()
     con.create_function('trn', 1, fold, deterministic=True)  # arama / siralama: SQL'de trn(sutun)
     return con
+
+
+def _hide_defaults(con):
+    """HIDE_DEFAULT firmalarini isaretle ve mevcut ilanlarini gizle."""
+    ids = [r[0] for r in con.execute('SELECT id, name FROM companies') if any(k in fold(r[1]) for k in HIDE_DEFAULT)]
+    for i in ids:
+        con.execute('UPDATE companies SET hide_jobs=1 WHERE id=?', (i,))
+        con.execute('UPDATE jobs SET hidden=1 WHERE company_id=?', (i,))
+    con.commit()
 
 
 def tl():
@@ -148,6 +168,7 @@ def import_excel(con, path=XLSX):
     with _lock:
         con.executemany('INSERT INTO companies(name,category,city,size,focus,website,website_source,excel_row) VALUES(?,?,?,?,?,?,?,?)', rows)
         con.commit()
+        _hide_defaults(con)
     _seed_known_sources(con)
     return len(rows)
 
@@ -197,3 +218,37 @@ def _seed_known_sources(con):
                 con.execute('INSERT INTO companies(name, ats, ats_slug, website_source) VALUES(?,?,?,?)',
                             (s['firma'], s['ats'], s['slug'], 'manuel'))
         con.commit()
+
+
+def sync_seeds(con, path=SEEDS):
+    """firmalar_global.json'daki firmalari ekle ya da ATS hesabini bagla (her acilista/taramada; mevcut isaretlere dokunmaz).
+    Kayit: {firma, ats, slug, extra?, kategori?, sehir?, web?, tr_only?, eslesme?: [listedeki baska adlari]}.
+    Var olan firmaya yalnizca hic ATS'i yoksa ya da genel ayristiricidaysa baglanir; kaynak calismadigi icin genel'e
+    dusmus firmaya (ats_extra = ayni ATS) yeniden baglanmaz. Dondurur: (eklenen, baglanan)."""
+    if not os.path.exists(path):
+        return 0, 0
+    with open(path, encoding='utf-8') as f:
+        seeds = json.load(f)
+    rows = {fold(r['name']): r for r in con.execute('SELECT id, name, ats, ats_slug, ats_extra, tr_only FROM companies')}
+    added = linked = 0
+    with _lock:
+        for s in seeds:
+            ats, slug, extra, tr = s['ats'], s['slug'], s.get('extra'), int(bool(s.get('tr_only', True)))
+            row = next((rows[k] for k in map(fold, [s['firma']] + s.get('eslesme', [])) if k in rows), None)
+            if row is None:
+                cur = con.execute('INSERT INTO companies(name, category, city, size, website, website_source, ats, ats_slug, ats_extra, tr_only) '
+                                  'VALUES(?,?,?,?,?,?,?,?,?,?)',
+                                  (s['firma'], s.get('kategori') or 'Global Şirket Türkiye Ofisi / Ar-Ge', s.get('sehir') or 'İstanbul',
+                                   s.get('buyukluk') or 'Büyük / kurumsal', s.get('web'), 'liste' if s.get('web') else None, ats, slug, extra, tr))
+                rows[fold(s['firma'])] = {'id': cur.lastrowid, 'ats': ats, 'ats_slug': slug, 'ats_extra': extra, 'tr_only': tr}
+                added += 1
+            elif row['ats'] == ats and row['ats_slug'] == slug:
+                if (row['ats_extra'], row['tr_only']) != (extra, tr):
+                    con.execute('UPDATE companies SET ats_extra=?, tr_only=? WHERE id=?', (extra, tr, row['id']))
+            elif row['ats'] is None or (row['ats'] == 'generic' and row['ats_extra'] != ats):
+                con.execute('UPDATE companies SET ats=?, ats_slug=?, ats_extra=?, tr_only=? WHERE id=?', (ats, slug, extra, tr, row['id']))
+                # genel ayristiricinin buldugu ilanlar artik ATS'den gelecek: cift kayit olmasin
+                con.execute("UPDATE jobs SET active=0 WHERE company_id=? AND source='genel' AND active=1", (row['id'],))
+                linked += 1
+        con.commit()
+    return added, linked

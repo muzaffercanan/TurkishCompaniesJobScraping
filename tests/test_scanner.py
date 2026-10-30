@@ -321,6 +321,35 @@ class UpsertInsert(UpsertBase):
         self.assertEqual((w['detail_kind'], w['detail_url']), ('workday', 'https://x/api/w'))
 
 
+class HiddenCompany(UpsertBase):
+    def test_new_jobs_of_hidden_company_go_to_hidden(self):
+        self.con.execute('UPDATE companies SET hide_jobs=1 WHERE id=1')
+        self.con.commit()
+        scanner.upsert(self.con, 1, 'lever', [self.job('a')])
+        self.assertEqual(self.row('a')['hidden'], 1)
+        _, fit = scanner._summarize_new()  # gizli ilan "bana uygun" bildirimine girmez
+        self.assertEqual(fit, [])
+
+    def test_user_unhide_survives_rescan(self):
+        self.con.execute('UPDATE companies SET hide_jobs=1 WHERE id=1')
+        self.con.commit()
+        scanner.upsert(self.con, 1, 'lever', [self.job('a')])
+        self.con.execute("UPDATE jobs SET hidden=0 WHERE ext_id='a'")
+        self.con.commit()
+        scanner.upsert(self.con, 1, 'lever', [self.job('a')])
+        self.assertEqual(self.row('a')['hidden'], 0)
+
+    def test_default_hidden_companies(self):
+        for i, n in ((2, 'Baykar'), (3, 'TUSAŞ (Türk Havacılık ve Uzay Sanayii)'), (4, 'ROKETSAN'), (5, 'ASELSAN'),
+                     (6, 'TÜBİTAK BİLGEM'), (7, 'Trendyol')):
+            self.con.execute('INSERT INTO companies(id, name) VALUES(?, ?)', (i, n))
+        self.con.execute("INSERT INTO jobs(company_id, source, ext_id, title) VALUES(5, 'genel', 'x', 'Yazılım Mühendisi')")
+        db._hide_defaults(self.con)
+        hidden = {r[0] for r in self.con.execute('SELECT id FROM companies WHERE hide_jobs=1')}
+        self.assertEqual(hidden, {2, 3, 4, 5, 6})
+        self.assertEqual(self.con.execute("SELECT hidden FROM jobs WHERE ext_id='x'").fetchone()[0], 1)
+
+
 class UpsertUpdate(UpsertBase):
     def test_update_keeps_user_marks_and_first_seen(self):
         scanner.upsert(self.con, 1, 'lever', [self.job('a')])
@@ -776,3 +805,145 @@ class StopScan(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TrOnly(UpsertBase):
+    """Cok uluslu firmalar (tr_only=1): kaynagin yalnizca Turkiye'deki ilanlari alinir."""
+
+    def setUp(self):
+        super().setUp()
+        for k in ('new', 'closed', 'ok', 'failed'):
+            scanner.STATE[k] = 0
+        p = mock.patch.object(scanner, 'enrich_pending', lambda cid: 0)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def company(self):
+        return dict(id=1, name='Firma', ats='greenhouse', ats_slug='firma', ats_extra=None, job_count=0, tr_only=1)
+
+    def test_only_turkey_jobs_are_kept(self):
+        jobs = [self.job('a', location='Istanbul, Turkey'), self.job('b', location='London, UK'), self.job('c', location='Ankara')]
+        with mock.patch.object(atsmod, 'fetch_jobs', return_value=jobs):
+            scanner.scan_known(self.con, self.company())
+        self.assertEqual(self.active('greenhouse'), {'a', 'c'})
+        self.assertIn('Turkiye filtresi: 2 / 3', self.con.execute('SELECT status_note FROM companies WHERE id=1').fetchone()[0])
+
+    def test_no_turkey_jobs_left_closes_old_ones(self):
+        many = [self.job(str(i), location='Istanbul') for i in range(12)]
+        with mock.patch.object(atsmod, 'fetch_jobs', return_value=many):
+            scanner.scan_known(self.con, self.company())
+        with mock.patch.object(atsmod, 'fetch_jobs', return_value=[self.job('x', location='Berlin, Germany')]):
+            scanner.scan_known(self.con, self.company())
+        self.assertEqual(self.active('greenhouse'), set())  # kaynak calisiyor, Turkiye'de ilan kalmadi: koruma devreye girmez
+
+    def test_broken_source_does_not_close(self):
+        many = [self.job(str(i), location='Istanbul') for i in range(12)]
+        with mock.patch.object(atsmod, 'fetch_jobs', return_value=many):
+            scanner.scan_known(self.con, self.company())
+        with mock.patch.object(atsmod, 'fetch_jobs', return_value=[]):
+            scanner.scan_known(self.con, self.company())
+        self.assertEqual(len(self.active('greenhouse')), 12)
+
+
+class Seeds(TempDb):
+    def write(self, items):
+        import json
+        import os
+        path = os.path.join(self.tmp, 'seeds.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(items, f)
+        return path
+
+    def test_new_company_is_added_with_ats(self):
+        path = self.write([{'firma': 'Mastercard', 'ats': 'workday', 'slug': 'mastercard', 'extra': 'wd1|CorporateCareers',
+                            'web': 'https://mastercard.com'}])
+        self.assertEqual(db.sync_seeds(self.con, path), (1, 0))
+        r = self.con.execute("SELECT * FROM companies WHERE name='Mastercard'").fetchone()
+        self.assertEqual((r['ats'], r['ats_slug'], r['ats_extra'], r['tr_only'], r['size']),
+                         ('workday', 'mastercard', 'wd1|CorporateCareers', 1, 'Büyük / kurumsal'))
+        self.assertEqual(db.sync_seeds(self.con, path), (0, 0))  # ikinci calisma bir sey degistirmez
+
+    def test_existing_company_without_ats_is_linked_and_generic_jobs_closed(self):
+        self.con.execute("INSERT INTO companies(id, name, ats, status) VALUES(2, 'Vodafone Türkiye', 'generic', 'sayfa-var-ilan-yok')")
+        self.con.execute("INSERT INTO jobs(company_id, source, ext_id, title, active) VALUES(2, 'genel', 'x', 'Kariyer', 1)")
+        path = self.write([{'firma': 'Vodafone', 'eslesme': ['Vodafone Türkiye'], 'ats': 'eightfold', 'slug': 'jobs.vodafone.com',
+                            'extra': 'vodafone.com'}])
+        self.assertEqual(db.sync_seeds(self.con, path), (0, 1))
+        r = self.con.execute('SELECT ats, ats_slug, tr_only FROM companies WHERE id=2').fetchone()
+        self.assertEqual(tuple(r), ('eightfold', 'jobs.vodafone.com', 1))
+        self.assertEqual(self.con.execute("SELECT active FROM jobs WHERE ext_id='x'").fetchone()[0], 0)
+
+    def test_failed_ats_is_not_relinked(self):  # scan_known 404 sonrasi genel'e dusurdu (ats_extra = eski ATS)
+        self.con.execute("INSERT INTO companies(id, name, ats, ats_extra) VALUES(2, 'Uber', 'generic', 'oracle')")
+        path = self.write([{'firma': 'Uber', 'ats': 'oracle', 'slug': 'UberCareers', 'extra': 'x.oraclecloud.com'}])
+        self.assertEqual(db.sync_seeds(self.con, path), (0, 0))
+        self.assertEqual(self.con.execute('SELECT ats FROM companies WHERE id=2').fetchone()[0], 'generic')
+
+    def test_company_with_other_ats_is_left_alone(self):
+        self.con.execute("INSERT INTO companies(id, name, ats, ats_slug) VALUES(2, 'Amazon Türkiye', 'custom', 'amazon')")
+        path = self.write([{'firma': 'Amazon', 'eslesme': ['Amazon Türkiye'], 'ats': 'workday', 'slug': 'amazon', 'extra': 'wd1|x'}])
+        self.assertEqual(db.sync_seeds(self.con, path), (0, 0))
+        self.assertEqual(self.con.execute('SELECT ats FROM companies WHERE id=2').fetchone()[0], 'custom')
+
+    def test_repo_seed_file_is_valid(self):
+        import json
+        with open(db.SEEDS, encoding='utf-8') as f:
+            seeds = json.load(f)
+        names = [s['firma'] for s in seeds]
+        self.assertEqual(len(names), len(set(names)), 'ayni firma iki kez')
+        for s in seeds:
+            self.assertIn(s['ats'], atsmod.READERS, s)
+            self.assertTrue(atsmod.has_reader(s['ats'], s.get('extra')), s)
+
+
+class Aggregators(UpsertBase):
+    """Workable genel aramasi: ilanlar firmalara dagitilir; yeni firma yalnizca teknik ilani varsa eklenir."""
+
+    def setUp(self):
+        super().setUp()
+        for k in ('new', 'closed', 'ok', 'failed'):
+            scanner.STATE[k] = 0
+        scanner.STATE['log'].clear()
+
+    def wj(self, jid, title, company, website='', loc='Istanbul, İstanbul, Turkey'):
+        return dict(id=jid, title=title, location=loc, team='', url=f'https://jobs.workable.com/view/{jid}', posted=None, remote=False,
+                    desc='', company=dict(key=company, name=company, website=website))
+
+    def run_with(self, jobs):
+        with mock.patch.object(scanner.agg, 'workable_turkey', return_value=jobs):
+            scanner.scan_aggregators(self.con)
+
+    def test_new_tech_company_added_nontech_skipped(self):
+        self.run_with([self.wj('1', 'Backend Developer', 'Yeni Teknoloji', 'https://yeni.io'), self.wj('2', 'Chef de Partie', 'Otel A.Ş.')])
+        names = {r[0] for r in self.con.execute("SELECT name FROM companies WHERE ats='agg'")}
+        self.assertEqual(names, {'Yeni Teknoloji'})
+        r = self.con.execute("SELECT * FROM companies WHERE name='Yeni Teknoloji'").fetchone()
+        self.assertEqual((r['category'], r['city'], r['tr_only'], r['job_count']), (scanner.AGG_CATEGORY, 'Istanbul', 1, 1))
+        self.assertEqual(self.con.execute("SELECT COUNT(*) FROM jobs WHERE source='workable-tr'").fetchone()[0], 1)
+
+    def test_company_with_own_source_is_skipped(self):
+        self.con.execute("UPDATE companies SET name='Vertigo Games', website='https://vertigogames.co', ats='lever', ats_slug='v' WHERE id=1")
+        self.con.commit()
+        self.run_with([self.wj('1', 'Unity Developer', 'Vertigo', 'https://vertigogames.co/')])
+        self.assertEqual(self.con.execute("SELECT COUNT(*) FROM jobs WHERE source='workable-tr'").fetchone()[0], 0)
+
+    def test_existing_company_without_source_is_matched_by_site(self):
+        self.con.execute("UPDATE companies SET website='https://www.huawei.com' WHERE id=1")
+        self.con.commit()
+        self.run_with([self.wj('1', 'Cloud Data Center Operator', 'Huawei Telekomünikasyon Dış Ticaret Ltd', 'https://www.huawei.com/en/')])
+        r = self.con.execute('SELECT ats, ats_slug, job_count FROM companies WHERE id=1').fetchone()
+        self.assertEqual(tuple(r), ('agg', 'workable-tr', 1))
+
+    def test_similar_name_is_not_matched(self):  # 'PLANET S.A.' (planet.gr) listedeki 'Digital Planet' (planet.com) degildir
+        self.con.execute("UPDATE companies SET name='Digital Planet', website='https://www.planet.com' WHERE id=1")
+        self.con.commit()
+        self.run_with([self.wj('1', 'Software Engineer', 'PLANET S.A.', 'http://www.planet.gr')])
+        self.assertIsNone(self.con.execute('SELECT ats FROM companies WHERE id=1').fetchone()[0])
+        self.assertEqual(self.con.execute("SELECT COUNT(*) FROM companies WHERE name='PLANET S.A.'").fetchone()[0], 1)
+
+    def test_company_gone_from_search_is_closed_but_empty_search_closes_nothing(self):
+        self.run_with([self.wj('1', 'Backend Developer', 'Yeni Teknoloji')])
+        self.run_with([])  # arama bos/bozuk: dokunulmaz
+        self.assertEqual(self.con.execute('SELECT COUNT(*) FROM jobs WHERE active=1').fetchone()[0], 1)
+        self.run_with([self.wj('9', 'Frontend Developer', 'Baska Firma')])
+        self.assertEqual({r[0] for r in self.con.execute('SELECT ext_id FROM jobs WHERE active=1')}, {'9'})
