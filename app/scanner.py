@@ -63,7 +63,9 @@ TECH = re.compile(r'software|yazilim|developer|gelistirici|backend|back-end|fron
 
 
 TR_LOC = TR_PLACE  # util.TR_PLACE: ATS okuyuculari da (Workday konum filtresi) ayni kalibi kullanir
-REMOTE = re.compile(r'remote|uzaktan|anywhere|hybrid|hibrit|work from home')
+REMOTE = re.compile(r'remote|uzaktan|anywhere|worldwide|hybrid|hibrit|work from home')
+REMOTE_PLACE = re.compile(r'\b(?:remote|uzaktan|anywhere|worldwide|everywhere|global|emea|hybrid|hibrit|work from home|wfh|'
+                          r'telecommut\w*|home\s*office|full[y\s-]*remote|roles?|jobs?|only|work|working|from)\b|[^a-z]+')
 
 
 def region_of(location, remote=False):
@@ -71,7 +73,9 @@ def region_of(location, remote=False):
     if TR_LOC.search(l):
         return 'Türkiye'
     if remote or REMOTE.search(l):
-        return 'Uzaktan'
+        parts = [p.strip() for p in l.split(';') if p.strip()]
+        if not parts or any(not REMOTE_PLACE.sub('', p) for p in parts if remote or REMOTE.search(p)):
+            return 'Uzaktan'
     return 'Yurt dışı' if l.strip(' ,-') else 'Belirtilmemiş'
 
 
@@ -97,6 +101,8 @@ def upsert(con, company_id, source, jobs, definitive=True, guard=True):
     """Ilanlari ekle/guncelle. definitive=True ise listede olmayan aktif ilanlar kapatilir.
     Dondurur: (yeni, kapanan, onceki_aktif_sayisi, ortusme_orani, yeni_ilan_id_listesi)"""
     now, new = _today(), 0
+    had_jobs = any(j.get('title') for j in jobs)
+    jobs = [j for j in jobs if region_of(j.get('location', ''), j.get('remote')) != 'Yurt dışı']
     prev = db.tl().execute('SELECT id, ext_id FROM jobs WHERE company_id=? AND source=? AND active=1', (company_id, source)).fetchall()
     prev_ids = {r['ext_id'] for r in prev}
     # Kaynagin ilk taramasi: bu ilanlar siteye bugun eklenmedi, ilk kez goruluyor; arayuzde "yeni" sayilmaz (is_baseline=1).
@@ -145,7 +151,7 @@ def upsert(con, company_id, source, jobs, definitive=True, guard=True):
                 STATE['fresh'] = STATE.get('fresh', 0) + 1  # tarama surerken kaba sayac; kesin sayi _summarize_new'de
             new_rows.append((cur.lastrowid, j, region, bool(desc)))
     closed = 0
-    if definitive and (ids or len(prev) <= 3 or not guard):  # onceden cok ilan vardi ve simdi 0 geldiyse kaynak bozulmus olabilir
+    if definitive and (ids or had_jobs or len(prev) <= 3 or not guard):  # onceden cok ilan vardi ve simdi 0 geldiyse kaynak bozulmus olabilir
         for r in prev:
             if r['ext_id'] not in ids:
                 db.write(db.tl(), 'UPDATE jobs SET active=0 WHERE id=?', (r['id'],))
@@ -170,9 +176,9 @@ def enrich_pending(company_id):
             level, exp = seniority.level_from(title_level, desc)
             db.write(db.tl(), 'UPDATE jobs SET description=?, exp_min=?, level=?, posted=COALESCE(posted, ?), detail_checked=1 WHERE id=?',
                      (desc[:6000], exp, level, posted, r['id']))
-            if loc and not (r['location'] or '').strip():  # listede konum yoktu, detay sayfasi verdi (uzaktan isaretli ilan uzaktan kalir)
-                region = r['region'] if r['region'] == 'Uzaktan' and region_of(loc) != 'Türkiye' else region_of(loc)
-                db.write(db.tl(), 'UPDATE jobs SET location=?, region=? WHERE id=?', (loc, region, r['id']))
+            if loc and not (r['location'] or '').strip():  # listede konum yoktu, detay sayfasi verdi
+                region = region_of(loc, r['region'] == 'Uzaktan')
+                db.write(db.tl(), 'UPDATE jobs SET location=?, region=?, active=? WHERE id=?', (loc, region, int(region != 'Yurt dışı'), r['id']))
             done += 1
         else:
             db.write(db.tl(), 'UPDATE jobs SET detail_checked=1 WHERE id=?', (r['id'],))
@@ -267,14 +273,15 @@ def scan_known(con, c):
         new, closed, prev, overlap, new_rows = upsert(con, c['id'], source, jobs, guard=not getattr(jobs, 'confirmed', False))
         enrich_pending(c['id'])
         active = db.tl().execute('SELECT COUNT(*) FROM jobs WHERE company_id=? AND active=1', (c['id'],)).fetchone()[0]
-        note = f'{source}: {len(jobs)} ilan' + (f' ({jobs.note})' if getattr(jobs, 'note', '') else '')
-        if jobs and c['ats'] != 'custom' and not any(region_of(j.get('location', ''), j.get('remote')) in ('Türkiye', 'Uzaktan', 'Belirtilmemiş')
-                                                     for j in jobs):
+        kept = [j for j in jobs if region_of(j.get('location', ''), j.get('remote')) != 'Yurt dışı']
+        note = f'{source}: {len(kept)} ilan' + (f' ({jobs.note})' if getattr(jobs, 'note', '') else
+                                                f' (Turkiye/uzaktan: {len(kept)} / {len(jobs)})' if len(kept) != len(jobs) else '')
+        if jobs and c['ats'] != 'custom' and not kept:
             note += ' — dikkat: hicbiri Turkiye/uzaktan degil, yanlis eslesme olabilir'
-        flags = _check_health(c, source, prev, len(jobs), overlap, new_rows)
+        flags = _check_health(c, source, prev, len(kept), overlap, new_rows)
         if flags:
             note += ' — SAGLIK: ' + '; '.join(flags)
-        _record_run(c, source, True, len(jobs), new, closed, prev, overlap)
+        _record_run(c, source, True, len(kept), new, closed, prev, overlap)
         _finish_company(con, c, 'ozel' if c['ats'] == 'custom' else 'ats', note, active)
         STATE['new'] += new
         STATE['closed'] += closed
@@ -341,12 +348,13 @@ def scan_discover(con, c, force=False):
             status = 'genel' if jobs else 'sayfa-var-ilan-yok'
             note = f'genel ayristirici: {len(jobs)} ilan' if jobs else 'kariyer sayfasi var, ilan listesi bulunamadi'
         if jobs is not None and (jobs or c['ats'] == 'generic'):
+            kept = [j for j in jobs if region_of(j.get('location', ''), j.get('remote')) != 'Yurt dışı']
             new, closed, prev, overlap, new_rows = upsert(con, c['id'], 'genel', jobs, definitive=True, guard=False)
             enrich_pending(c['id'])
-            flags = _check_health(c, 'genel', prev, len(jobs), overlap, new_rows)
+            flags = _check_health(c, 'genel', prev, len(kept), overlap, new_rows)
             if flags:
                 note = (note or '') + ' — SAGLIK: ' + '; '.join(flags)
-            _record_run(c, 'genel', True, len(jobs), new, closed, prev, overlap)
+            _record_run(c, 'genel', True, len(kept), new, closed, prev, overlap)
             STATE['new'] += new
             STATE['closed'] += closed
             if new:

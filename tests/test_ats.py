@@ -160,10 +160,14 @@ class NewPlatforms(unittest.TestCase):
             'https://kariyer.firma.com/ <link href="https://cdn.talentics.app/x/favicon">': ('talentics', 'kariyer', 'kariyer.firma.com'),
             'https://firma.com/kariyer <a href="https://firma.talentics.app/">Ilanlar</a>': ('talentics', 'firma', None),
             'https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs': ('oracle', 'CX_1001', 'jpmc.fa.oraclecloud.com'),
+            'https://eachlabs.ai/careers <a href="https://eachlabs.hrpanda.co/full-stack-engineer">Jobs</a>': ('hrpanda', 'eachlabs', None),
         }
         for blob, want in cases.items():
             self.assertEqual(ats.detect(blob), want, blob)
             self.assertTrue(ats.has_reader(want[0], want[2]), want)
+
+    def test_hrpanda_panel_links_are_not_a_board(self):  # 'Powered by HrPanda' giris baglantilari firma sayfasi degildir
+        self.assertIsNone(ats.detect('https://firma.com/ <a href="https://dashboard.hrpanda.co/auth/jwt/login">x</a>'))
 
     def test_eightfold_drops_fuzzy_non_turkey_matches(self):
         page = {'data': {'count': 2, 'positions': [

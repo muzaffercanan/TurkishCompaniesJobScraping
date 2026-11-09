@@ -32,6 +32,7 @@ CASES = [
     ('avature_siemens_energy', 'ats', 'avature', ('jobs.siemens-energy.com', 'en_US/jobs/Jobs')),  # Turkiye filtresi sayfadaki secim kutusundan
     ('successfactors_ey_tr', 'ats', 'successfactors', ('ey', 'careers.ey.com|Turkey')),
     ('talentics_kolayik', 'ats', 'talentics', ('jobs', 'jobs.kolayik.com')),
+    ('hrpanda_eachlabs', 'ats', 'hrpanda', ('eachlabs', None)),
     ('custom_turkcell', 'custom', 'turkcell', ()),
     ('custom_garanti', 'custom', 'garanti', ()),
     ('custom_havelsan', 'custom', 'havelsan', ()),

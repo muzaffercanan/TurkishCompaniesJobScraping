@@ -72,5 +72,6 @@
  {"firma": "Experian Türkiye", "ats": "smartrecruiters", "slug": "Experian", "extra": "tr", "web": "https://www.experian.com.tr", "kategori": "Fintech & Ödeme"},
  {"firma": "Strategy (MicroStrategy) Türkiye", "ats": "smartrecruiters", "slug": "MicroStrategy1", "extra": "tr", "web": "https://www.strategy.com", "kategori": "Kurumsal Yazılım, ERP & SaaS"},
  {"firma": "Voodoo İstanbul", "ats": "ashby", "slug": "voodoo", "web": "https://voodoo.io", "kategori": "Oyun"},
- {"firma": "Bybit", "ats": "greenhouse", "slug": "bybit", "web": "https://www.bybit.com", "kategori": "Kripto & Blockchain"}
+ {"firma": "each::labs", "eslesme": ["eachlabs", "Each Labs"], "ats": "hrpanda", "slug": "eachlabs", "web": "https://www.eachlabs.ai", "kategori": "Yapay Zeka & Veri"},
+ {"firma": "Bybit","ats": "greenhouse", "slug": "bybit", "web": "https://www.bybit.com", "kategori": "Kripto & Blockchain"}
 ]

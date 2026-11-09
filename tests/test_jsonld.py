@@ -88,15 +88,15 @@ class EnrichLocation(TempDb):
         return dict(id=ext, title='Backend Developer', url=f'https://ornek.com.tr/{ext}', location=location, remote=remote)
 
     def region(self, ext):
-        return tuple(self.con.execute("SELECT location, region FROM jobs WHERE ext_id=?", (ext,)).fetchone())
+        return tuple(self.con.execute("SELECT location, region, active FROM jobs WHERE ext_id=?", (ext,)).fetchone())
 
     def test_location_from_detail_fills_empty_location(self):
         scanner.upsert(self.con, 1, 'genel', [self.job('a'), self.job('b', location='İzmir'), self.job('c', remote=True)])
         with mock.patch.object(enrich, 'fetch_detail', return_value=('metin', None, 'Berlin, DE')), mock.patch.object(enrich, 'pace'):
             scanner.enrich_pending(1)
-        self.assertEqual(self.region('a'), ('Berlin, DE', 'Yurt dışı'))
-        self.assertEqual(self.region('b'), ('İzmir', 'Türkiye'))          # listedeki konum korunur
-        self.assertEqual(self.region('c'), ('Berlin, DE', 'Uzaktan'))     # uzaktan isaretli ilan uzaktan kalir
+        self.assertEqual(self.region('a'), ('Berlin, DE', 'Yurt dışı', 0))
+        self.assertEqual(self.region('b'), ('İzmir', 'Türkiye', 1))          # listedeki konum korunur
+        self.assertEqual(self.region('c'), ('Berlin, DE', 'Yurt dışı', 0))   # yurt disi uzaktan ilan kapatilir
 
 
 if __name__ == '__main__':

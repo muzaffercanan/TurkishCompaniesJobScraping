@@ -67,14 +67,16 @@ PATTERNS = [
     ('peoplise', r'(?<![A-Za-z0-9-])([A-Za-z0-9-]{1,63}\.)?peoplise\.com'),
     ('peoplebox', r'(?<![A-Za-z0-9-])([A-Za-z0-9-]{1,63})\.peoplebox\.biz'),
     ('hrpeak', r'(?<![A-Za-z0-9-])([A-Za-z0-9-]{1,63})\.hrpeak\.com'),
+    ('hrpanda', r'(?<![A-Za-z0-9-])([A-Za-z0-9-]{1,63})\.hrpanda\.co(?![A-Za-z0-9])'),
     ('kariyer.net', r'kariyer\.net/(?:firma-profil|is-ilanlari?)/([A-Za-z0-9_-]+)'),
     ('linkedin', r'linkedin\.com/company/([A-Za-z0-9_-]+)/jobs'),
 ]
 PATTERNS = [(a, re.compile(p, re.I)) for a, p in PATTERNS]
 BAD_SLUG = {'embed', 'api', 'v1', 'jobs', 'job', 'www', 'careers', 'career', 'apply', 'static', 'assets', 'cdn', 'js', 'images',
-            'app', 'help', 'support', 'blog', 'en', 'tr', 'de', 'careers-analytics', 'analytics', 'widget', 'portal'}
+            'app', 'help', 'support', 'blog', 'en', 'tr', 'de', 'careers-analytics', 'analytics', 'widget', 'portal',
+            'dashboard', 'uploads'}
 READERS = {'lever', 'greenhouse', 'ashby', 'workable', 'smartrecruiters', 'recruitee', 'personio', 'bamboohr', 'breezy',
-           'pinpoint', 'teamtailor', 'workday', 'successfactors', 'manatal', 'jazzhr', 'rippling', 'eightfold', 'talentbrew', 'talentics', 'oracle', 'phenom', 'avature'}
+           'pinpoint', 'teamtailor', 'workday', 'successfactors', 'manatal', 'jazzhr', 'rippling', 'eightfold', 'talentbrew', 'talentics', 'oracle', 'phenom', 'avature', 'hrpanda'}
 REDIRECT_ONLY = {'kariyer.net', 'linkedin'}
 
 
@@ -609,11 +611,34 @@ def talentics(slug, extra=None):
     return out
 
 
+def hrpanda(slug, extra=None):
+    """HrPanda (<slug>.hrpanda.co, Turk ATS): Next.js sayfasindaki __NEXT_DATA__ yayindaki ilanlarin tamamini tasir."""
+    host = extra or f'{slug}.hrpanda.co'
+    _, _, t = fetch(f'https://{host}/', robots=True)
+    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', t, re.S)
+    if not m:
+        raise HttpError('ayristirilamadi', host, '__NEXT_DATA__ yok')
+    props = json.loads(m.group(1)).get('props', {}).get('pageProps', {})
+    rows = ((props.get('listingsData') or {}).get('getPublishedJobListings') or {}).get('jobListings') or []
+    out = []
+    for j in rows:
+        if j.get('status') not in (None, 'PUBLISHED'):
+            continue
+        work = ((j.get('workType') or {}).get('name') or '')
+        dept = j.get('department')
+        out.append(dict(id=j['id'], title=(j.get('name') or '').strip(), location=j.get('location') or '',
+                        team=dept.get('name', '') if isinstance(dept, dict) else (dept or ''), url=f"https://{host}/{j.get('slug') or j['id']}",
+                        posted=_d(j.get('createdAt')), remote=work.lower() == 'remote',
+                        desc=text((j.get('description') or '') + ' ' + (j.get('jobRequirements') or ''))))
+    return out
+
+
 FETCHERS = {'lever': lever, 'greenhouse': greenhouse, 'ashby': ashby, 'workable': workable, 'smartrecruiters': smartrecruiters,
             'recruitee': recruitee, 'personio': personio, 'bamboohr': bamboohr, 'breezy': breezy, 'pinpoint': pinpoint,
             'teamtailor': teamtailor, 'workday': workday, 'successfactors': successfactors, 'manatal': manatal, 'jazzhr': jazzhr,
             'rippling': rippling, 'eightfold': eightfold, 'talentbrew': talentbrew, 'talentics': talentics,
-            'oracle': oracle, 'phenom': phenom, 'avature': avature}
+            'oracle': oracle, 'phenom': phenom, 'avature': avature,
+            'hrpanda': hrpanda}
 
 
 def fetch_jobs(ats, slug, extra=None):

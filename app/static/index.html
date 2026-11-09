@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light dark">
 <title>İlan Radarı</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236366f1'/%3E%3Cstop offset='1' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cg fill='none' stroke='white' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='16' cy='16' r='9' opacity='.55'/%3E%3Ccircle cx='16' cy='16' r='4.5' opacity='.8'/%3E%3Cpath d='M16 16l7-7'/%3E%3C/g%3E%3C/svg%3E">
-<script>try{const t=JSON.parse(localStorage.getItem('ir:theme'));if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
+<script>try{const t=JSON.parse(localStorage.getItem('ir:theme'));if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;const p=JSON.parse(localStorage.getItem('ir:palette'));if(p)document.documentElement.dataset.palette=p}catch(e){}</script>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -48,6 +48,8 @@
   <symbol id="i-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></symbol>
   <symbol id="i-arrow-up" viewBox="0 0 24 24"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></symbol>
   <symbol id="i-key" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.43-.18-.83-.44-1.12-.29-.29-.44-.65-.44-1.12a1.64 1.64 0 0 1 1.67-1.67h1.99c3.05 0 5.55-2.5 5.55-5.55C21.96 6.01 17.46 2 12 2z"/></symbol>
+  <symbol id="i-columns" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="14" y1="3" x2="14" y2="21"/></symbol>
 </defs></svg>
 
 <header class="top">
@@ -76,6 +78,7 @@
         <div class="pop-foot"><button class="btn sm" id="autoTest">Bildirimi dene</button><button class="btn sm primary" id="autoNow"><svg class="i"><use href="#i-zap"/></svg>Şimdi tara</button></div>
       </div>
     </div>
+    <button class="icon-btn pal-btn" id="btnPalette" title="Renk paleti değiştir (p)" aria-label="Renk paleti değiştir"><svg class="i"><use href="#i-palette"/></svg><i class="pal-dot"></i></button>
     <button class="icon-btn" id="btnTheme" title="Tema (t)" aria-label="Temayı değiştir"></button>
     <button class="icon-btn" id="btnHelp" title="Klavye kısayolları (?)" aria-label="Klavye kısayolları"><svg class="i"><use href="#i-keyboard"/></svg></button>
     <div class="split" id="scanSplit">
@@ -120,7 +123,7 @@
         <svg class="i"><use href="#i-search"/></svg>
         <input type="search" id="q" placeholder="İlan, firma, konum ara…  (ör. backend -senior, junior, Ankara)" autocomplete="off" spellcheck="false">
         <button class="clear" id="qclear" aria-label="Aramayı temizle" hidden><svg class="i"><use href="#i-x"/></svg></button>
-        <kbd id="qkbd">/</kbd>
+        <kbd id="qkbd" title="Hızlı arama (Ctrl+K veya /)">Ctrl K</kbd>
       </div>
       <div class="pop-wrap">
         <button class="btn" id="btnFilters" aria-haspopup="dialog" aria-expanded="false"><svg class="i"><use href="#i-sliders"/></svg><span>Filtreler</span><span class="badge" id="fbadge" hidden></span></button>
@@ -152,39 +155,41 @@
         <button data-g="0" title="Düz liste (g)"><svg class="i"><use href="#i-list"/></svg><span>Liste</span></button>
         <button data-g="1" title="Firmaya göre grupla (g)"><svg class="i"><use href="#i-layers"/></svg><span>Firmaya göre</span></button>
       </div>
+      <button class="icon-btn hide-md" id="btnSplit" title="Bölünmüş önizleme paneli (v)" aria-label="Bölünmüş önizleme paneli" aria-pressed="true"><svg class="i"><use href="#i-columns"/></svg></button>
       <button class="icon-btn" id="btnDense" title="Sıkı görünüm" aria-label="Sıkı görünüm" aria-pressed="false"><svg class="i"><use href="#i-rows"/></svg></button>
       <button class="icon-btn" id="btnExport" title="Görünen ilanları CSV olarak indir" aria-label="CSV indir"><svg class="i"><use href="#i-download"/></svg></button>
     </div>
 
-    <div class="subbar">
-      <div class="seg views" id="views" role="tablist" aria-label="İlan görünümü"></div>
-      <div class="grow"></div>
-      <button class="btn sm ghost" id="markAll" hidden title="Listedeki tüm ilanları görüldü say (geri alınabilir)"></button>
-      <span class="count" id="jcount" aria-live="polite"></span>
-    </div>
+    <div class="fdeck" id="fdeck">
+      <div class="subbar">
+        <div class="seg views" id="views" role="tablist" aria-label="İlan görünümü"></div>
+        <div class="active" id="active" hidden></div>
+        <div class="grow"></div>
+        <button class="btn sm ghost" id="markAll" hidden title="Listedeki tüm ilanları görüldü say (geri alınabilir)"></button>
+        <span class="count" id="jcount" aria-live="polite"></span>
+      </div>
 
-    <div class="qf">
-      <button class="chip preset" id="presetFit" title="Junior + staj, yazılım/teknik, Türkiye / uzaktan"><svg class="i"><use href="#i-sparkles"/></svg>Bana uygun</button>
-      <button class="chip" id="unseenChip" title="Henüz açmadığın ilanlar (u: görüldü / görülmedi)"><i class="dot2" style="--c:var(--accent)"></i>Görülmemiş</button>
-      <span class="sep"></span>
-      <span class="lab">Seviye</span>
-      <div class="chips" id="levels"></div>
-      <span class="sep"></span>
-      <span class="lab" title="Yayın tarihine göre; yayın tarihi olmayanlarda firmanın ilk taramasından sonra bulunma tarihine göre. İlk taramada bulunan ilanlar 'yeni' sayılmaz.">Eklenme</span>
-      <div class="seg sm" id="daychips" role="group" aria-label="Eklenme zamanı"></div>
-    </div>
+      <div class="qf">
+        <button class="chip preset" id="presetFit" title="Junior + staj, yazılım/teknik, Türkiye / uzaktan"><svg class="i"><use href="#i-sparkles"/></svg>Bana uygun</button>
+        <button class="chip" id="unseenChip" title="Henüz açmadığın ilanlar (u: görüldü / görülmedi)"><i class="dot2" style="--c:var(--accent)"></i>Görülmemiş</button>
+        <span class="sep"></span>
+        <span class="lab">Seviye</span>
+        <div class="chips" id="levels"></div>
+        <span class="sep"></span>
+        <span class="lab" title="Yayın tarihine göre; yayın tarihi olmayanlarda firmanın ilk taramasından sonra bulunma tarihine göre. İlk taramada bulunan ilanlar 'yeni' sayılmaz.">Eklenme</span>
+        <div class="seg sm" id="daychips" role="group" aria-label="Eklenme zamanı"></div>
+      </div>
 
-    <div class="qf" id="kwbar">
-      <span class="lab">Hızlı arama</span>
-      <div class="chips" id="kwchips"></div>
-    </div>
+      <div class="qf kw-ribbon" id="kwbar">
+        <span class="lab">Hızlı arama</span>
+        <div class="chips" id="kwchips"></div>
+      </div>
 
-    <div class="qf" id="stagebar" hidden>
-      <span class="lab">Başvuru aşaması</span>
-      <div class="chips" id="stages"></div>
+      <div class="qf" id="stagebar" hidden>
+        <span class="lab">Başvuru aşaması</span>
+        <div class="chips" id="stages"></div>
+      </div>
     </div>
-
-    <div class="active" id="active" hidden></div>
 
     <div id="jlist" class="list" aria-live="polite"></div>
     <button class="more" id="jmore" hidden></button>
@@ -252,6 +257,7 @@
     <button class="icon-btn" id="dnext" title="Sonraki ilan (j)" aria-label="Sonraki ilan"><svg class="i"><use href="#i-chev-r"/></svg></button>
     <span class="muted" id="dpos"></span>
     <div class="grow"></div>
+    <button class="icon-btn hide-md" id="dpin" title="Yan yana / tam çekmece görünümü (v)" aria-label="Yan yana görünüm"><svg class="i"><use href="#i-columns"/></svg></button>
     <button class="icon-btn" id="dcopy" title="Bağlantıyı kopyala" aria-label="Bağlantıyı kopyala"><svg class="i"><use href="#i-copy"/></svg></button>
     <button class="icon-btn" id="dclose" title="Kapat (Esc)" aria-label="Kapat"><svg class="i"><use href="#i-x"/></svg></button>
   </div>
@@ -279,7 +285,7 @@
   <form method="dialog">
     <h3>Klavye kısayolları</h3>
     <div class="keys">
-      <div><kbd>/</kbd><span>Aramaya git</span></div>
+      <div><kbd>Ctrl</kbd> <kbd>K</kbd> / <kbd>/</kbd><span>Aramaya git</span></div>
       <div><kbd>j</kbd> <kbd>k</kbd><span>Sonraki / önceki ilan</span></div>
       <div><kbd>Enter</kbd><span>İlan detayını aç</span></div>
       <div><kbd>o</kbd><span>İlana git (yeni sekme)</span></div>
@@ -289,6 +295,8 @@
       <div><kbd>u</kbd><span>Görüldü / görülmedi işaretle</span></div>
       <div><kbd>f</kbd><span>Filtreleri aç</span></div>
       <div><kbd>g</kbd><span>Firmaya göre grupla</span></div>
+      <div><kbd>v</kbd><span>Bölünmüş önizleme (Split-View)</span></div>
+      <div><kbd>p</kbd><span>Renk paleti değiştir</span></div>
       <div><kbd>t</kbd><span>Tema değiştir</span></div>
       <div><kbd>1</kbd>–<kbd>5</kbd><span>Sekmeler arasında geç</span></div>
       <div><kbd>Esc</kbd><span>Kapat / aramayı temizle</span></div>

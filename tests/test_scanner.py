@@ -83,7 +83,12 @@ class Region(unittest.TestCase):
         self.assertEqual(scanner.region_of('Remote'), 'Uzaktan')
         self.assertEqual(scanner.region_of('Uzaktan / Hibrit'), 'Uzaktan')
         self.assertEqual(scanner.region_of('Anywhere'), 'Uzaktan')
-        self.assertEqual(scanner.region_of('Berlin', remote=True), 'Uzaktan')
+        self.assertEqual(scanner.region_of('Remote Roles - EMEA'), 'Uzaktan')
+        self.assertEqual(scanner.region_of('', remote=True), 'Uzaktan')
+        self.assertEqual(scanner.region_of('Berlin', remote=True), 'Yurt dışı')
+        self.assertEqual(scanner.region_of('Taiwan (Remote)'), 'Yurt dışı')
+        self.assertEqual(scanner.region_of('Remote - USA'), 'Yurt dışı')
+        self.assertEqual(scanner.region_of('Remote Roles - APAC'), 'Yurt dışı')
 
     def test_turkey_wins_over_remote(self):
         self.assertEqual(scanner.region_of('Remote - Istanbul'), 'Türkiye')
@@ -273,8 +278,9 @@ class UpsertInsert(UpsertBase):
         self.assertEqual((self.row('p', 'program')['is_tech'], self.row('q', 'program')['is_tech']), (1, 0))
 
     def test_remote_flag_sets_region(self):
-        scanner.upsert(self.con, 1, 'lever', [self.job('a', location='Berlin', remote=True)])
+        scanner.upsert(self.con, 1, 'lever', [self.job('a', location='', remote=True), self.job('b', location='Berlin', remote=True)])
         self.assertEqual(self.row('a')['region'], 'Uzaktan')
+        self.assertIsNone(self.row('b'))
 
     def test_new_ids_are_tracked(self):
         scanner.upsert(self.con, 1, 'lever', [self.job('a'), self.job('b')])
@@ -776,7 +782,7 @@ class SummarizeNew(UpsertBase):
         scanner.upsert(self.con, 1, 'lever', [self.job('fit', title='Junior Backend Developer'), self.job('senior', title='Senior Backend Developer'),
                                               self.job('abroad', title='Junior Backend Developer', location='London, UK')])
         fresh, fit = scanner._summarize_new()
-        self.assertEqual(fresh, 3)
+        self.assertEqual(fresh, 2)
         self.assertEqual([f['title'] for f in fit], ['Junior Backend Developer'])
         self.assertEqual(fit[0]['company'], 'Firma')
 
