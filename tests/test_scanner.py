@@ -897,7 +897,11 @@ class Seeds(TempDb):
             seeds = json.load(f)
         names = [s['firma'] for s in seeds]
         self.assertEqual(len(names), len(set(names)), 'ayni firma iki kez')
+        from app import custom
         for s in seeds:
+            if s['ats'] == 'custom':  # firmaya ozel okuyucu: slug REGISTRY'de olmali
+                self.assertIn(s['slug'], custom.REGISTRY, s)
+                continue
             self.assertIn(s['ats'], atsmod.READERS, s)
             self.assertTrue(atsmod.has_reader(s['ats'], s.get('extra')), s)
 

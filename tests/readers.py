@@ -40,6 +40,7 @@ CASES = [
     ('custom_amazon', 'custom', 'amazon', ()),
     ('custom_roketsan', 'custom', 'roketsan', ()),
     ('custom_baykar', 'custom', 'baykar', ()),
+    ('custom_ensight', 'custom', 'ensight', ()),
 ]
 DB_ARGS = {'workday_oyakrenault': 'Oyak Renault', 'teamtailor_pulsetto': 'Pulsetto', 'personio_kunbus': 'Kunbus'}
 

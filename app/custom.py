@@ -168,7 +168,31 @@ def baykar():
     return out
 
 
-REGISTRY = {'turkcell': turkcell, 'garanti': garanti, 'havelsan': havelsan, 'turktelekom': turktelekom, 'amazon': amazon, 'roketsan': roketsan, 'baykar': baykar}
+# --------------------------------------------------------------------------- Ensight Data & AI
+def ensight():
+    """WordPress ozel blogu: article.ensight-careers__row (h3 baslik, iki meta: sehir ve calisma turu); detay butonunun
+    data-job-detail anahtari sayfadaki JS nesnesinde ('<anahtar>': {title, meta, content: `<html>`}) aciklamaya karsilik gelir."""
+    base = 'https://ensight.com.tr/kariyer/'
+    page = _open(base)
+    details = {m.group(1): (_txt(m.group(2)), _txt(m.group(3))) for m in
+               re.finditer(r"'([a-z0-9-]+)'\s*:\s*\{\s*title:\s*'([^']*)'.*?content:\s*`(.*?)`", page, re.S)}
+    out = []
+    for row in dom.parse(page).find_all('article', cls='ensight-careers__row'):
+        h, btn = row.find('h3'), row.find('button', cls='ensight-careers__details')
+        if h is None:
+            continue
+        meta = [m.text() for m in row.find_all('div', cls='ensight-careers__meta')]
+        key = (btn.get('data-job-detail') if btn else '') or re.sub(r'[^a-z0-9]+', '-', h.text().lower()).strip('-')
+        city, mode = (meta + ['', ''])[:2]
+        title, desc = details.get(key, ('', ''))
+        out.append(dict(id=key, title=title or _tr_title(h.text()), location=f'{city}, Türkiye' if city else 'Türkiye',
+                        team='', url=f'{base}#{key}', posted=None, remote=bool(re.search(r'remote|uzaktan', mode, re.I)),
+                        desc=desc or None))
+    return out
+
+
+REGISTRY = {'turkcell': turkcell, 'garanti': garanti, 'havelsan': havelsan, 'turktelekom': turktelekom, 'amazon': amazon, 'roketsan': roketsan, 'baykar': baykar,
+            'ensight': ensight}
 
 if __name__ == '__main__':  # python -m app.custom [turkcell ...]  -> her okuyucuyu canli dene
     import sys
